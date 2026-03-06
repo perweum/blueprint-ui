@@ -54,6 +54,11 @@ export function GroupPicker({ onClose, initialMode = 'list' }: GroupPickerProps)
   }, [mode]);
 
   function pick(folder: string) {
+    if (folder === currentGroupFolder) { onClose(); return; }
+    const { saveStatus } = useStore.getState();
+    if (saveStatus === 'unsaved') {
+      if (!confirm('You have unsaved changes. Open a different bot and lose them?')) return;
+    }
     openGroup(folder);
     onClose();
   }
@@ -92,7 +97,11 @@ export function GroupPicker({ onClose, initialMode = 'list' }: GroupPickerProps)
             + New bot
           </button>
           {currentGroupFolder && mode === 'list' && (
-            <button className="group-picker__close-btn" onClick={() => { closeGroup(); onClose(); }}>
+            <button className="group-picker__close-btn" onClick={() => {
+              const { saveStatus } = useStore.getState();
+              if (saveStatus === 'unsaved' && !confirm('You have unsaved changes. Close and lose them?')) return;
+              closeGroup(); onClose();
+            }}>
               Close current
             </button>
           )}
@@ -131,7 +140,7 @@ export function GroupPicker({ onClose, initialMode = 'list' }: GroupPickerProps)
                       )}
                     </div>
                   </div>
-                  {isActive && <span className="group-picker__current-badge">editing</span>}
+                  {isActive && <span className="group-picker__current-badge">currently open</span>}
                 </button>
               );
             })}
