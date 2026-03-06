@@ -1175,3 +1175,96 @@ body {
   height: 10px !important;
 }
 .react-flow__handle:hover { border-color: var(--accent-agent) !important; }
+
+/* ── Command log (terminal output in chat) ────────────────── */
+.chat-msg__cmd-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.cmd-entry {
+  background: #080814;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 11px;
+}
+.cmd-entry--err { border-color: #7f1d1d55; }
+.cmd-entry__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: rgba(255,255,255,0.02);
+}
+.cmd-entry__status { font-size: 10px; }
+.cmd-entry--ok .cmd-entry__status { color: #4ade80; }
+.cmd-entry--err .cmd-entry__status { color: #f87171; }
+.cmd-entry__cmd {
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  color: #a5b4fc;
+  font-size: 11px;
+  word-break: break-all;
+}
+.cmd-entry__output {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 10px;
+  color: #6b7280;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Pending command confirmation card ────────────────────── */
+.chat-msg__confirm {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #12100a;
+  border: 1px solid #f59e0b40;
+  border-radius: 8px;
+}
+.chat-msg__confirm-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.chat-msg__confirm-cmd {
+  display: block;
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 11px;
+  color: #fbbf24;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+.chat-msg__confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.chat-msg__confirm-cancel {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.chat-msg__confirm-cancel:hover { border-color: var(--text-muted); color: var(--text); }
+.chat-msg__confirm-approve {
+  padding: 5px 12px;
+  background: #f59e0b20;
+  border: 1px solid #f59e0b50;
+  border-radius: 5px;
+  color: #fbbf24;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+.chat-msg__confirm-approve:hover:not(:disabled) { background: #f59e0b30; }
+.chat-msg__confirm-approve:disabled { opacity: 0.5; cursor: not-allowed; }

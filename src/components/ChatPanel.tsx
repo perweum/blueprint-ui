@@ -51,6 +51,21 @@ export function ChatPanel() {
 
         {chatMessages.map((msg) => (
           <div key={msg.id} className={`chat-msg chat-msg--${msg.role}`}>
+            {msg.commandLog && msg.commandLog.length > 0 && (
+              <div className="chat-msg__cmd-log">
+                {msg.commandLog.map((entry, i) => (
+                  <div key={i} className={`cmd-entry cmd-entry--${entry.ok ? 'ok' : 'err'}`}>
+                    <div className="cmd-entry__header">
+                      <span className="cmd-entry__status">{entry.ok ? '✓' : '✗'}</span>
+                      <code className="cmd-entry__cmd">{entry.cmd}</code>
+                    </div>
+                    {entry.output && entry.output !== '(no output)' && (
+                      <pre className="cmd-entry__output">{entry.output}</pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="chat-msg__bubble">
               {msg.content}
               {msg.opsApplied !== undefined && msg.opsApplied > 0 && (
@@ -59,6 +74,27 @@ export function ChatPanel() {
                 </div>
               )}
             </div>
+            {msg.pendingCommand && (
+              <div className="chat-msg__confirm">
+                <div className="chat-msg__confirm-label">Command requires approval:</div>
+                <code className="chat-msg__confirm-cmd">{msg.pendingCommand.cmd}</code>
+                <div className="chat-msg__confirm-actions">
+                  <button
+                    className="chat-msg__confirm-cancel"
+                    onClick={() => useStore.getState().cancelPendingCommand(msg.id)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="chat-msg__confirm-approve"
+                    onClick={() => useStore.getState().confirmPendingCommand(msg.id)}
+                    disabled={isChatLoading}
+                  >
+                    Approve & run
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
 

@@ -42,11 +42,20 @@ function defaultData(kind: NodeKind): BlueprintNodeData {
   }
 }
 
+export interface CommandLogEntry {
+  cmd: string;
+  output: string;
+  ok: boolean;
+  description: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   opsApplied?: number;
+  commandLog?: CommandLogEntry[];
+  pendingCommand?: { cmd: string; description: string } | null;
 }
 
 export type SaveStatus = 'idle' | 'unsaved' | 'saving' | 'saved' | 'error';
@@ -78,6 +87,8 @@ interface BlueprintStore {
   deleteNode: (id: string) => void;
   applyOperations: (ops: Operation[]) => number;
   sendChatMessage: (text: string) => Promise<void>;
+  confirmPendingCommand: (msgId: string) => Promise<void>;
+  cancelPendingCommand: (msgId: string) => void;
 
   fetchGroups: () => Promise<GroupInfo[]>;
   openGroup: (folder: string) => Promise<void>;
@@ -222,6 +233,8 @@ export const useStore = create<BlueprintStore>((set, get) => ({
         role: 'assistant',
         content: data.message,
         opsApplied,
+        commandLog: data.commandLog,
+        pendingCommand: data.pendingCommand,
       };
       set((s) => ({ chatMessages: [...s.chatMessages, assistantMsg] }));
     } catch (err) {
@@ -234,6 +247,76 @@ export const useStore = create<BlueprintStore>((set, get) => ({
     } finally {
       set({ isChatLoading: false });
     }
+  },
+
+  confirmPendingCommand: async (msgId: string) => {
+    const { chatMessages, nodes, edges, applyOperations } = get();
+    const pendingMsg = chatMessages.find((m) => m.id === msgId);
+    if (!pendingMsg?.pendingCommand) return;
+
+    const confirmedCmd = pendingMsg.pendingCommand.cmd;
+
+    // Mark as approved (clear the pending card) and start loading
+    set((s) => ({
+      chatMessages: s.chatMessages.map((m) =>
+        m.id === msgId ? { ...m, pendingCommand: null } : m,
+      ),
+      isChatLoading: true,
+    }));
+
+    // Build history without the pending-command interruption message
+    const history = chatMessages
+      .filter((m) => m.id !== msgId && !(m.role === 'assistant' && m.pendingCommand != null))
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    const graphState = buildGraphSummary(nodes, edges);
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: history, graphState, confirmedCommands: [confirmedCmd] }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error((e as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json() as {
+        message: string;
+        operations?: Operation[];
+        commandLog?: CommandLogEntry[];
+        pendingCommand?: { cmd: string; description: string };
+      };
+      const opsApplied = data.operations?.length ? applyOperations(data.operations) : 0;
+      set((s) => ({
+        chatMessages: [...s.chatMessages, {
+          id: `msg-${Date.now()}`,
+          role: 'assistant' as const,
+          content: data.message,
+          opsApplied,
+          commandLog: data.commandLog,
+          pendingCommand: data.pendingCommand,
+        }],
+      }));
+    } catch (err) {
+      set((s) => ({
+        chatMessages: [...s.chatMessages, {
+          id: `msg-${Date.now()}`,
+          role: 'assistant' as const,
+          content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        }],
+      }));
+    } finally {
+      set({ isChatLoading: false });
+    }
+  },
+
+  cancelPendingCommand: (msgId: string) => {
+    set((s) => ({
+      chatMessages: s.chatMessages.map((m) =>
+        m.id === msgId ? { ...m, pendingCommand: null, content: m.content + '\n\n*(Cancelled)*' } : m,
+      ),
+    }));
   },
 
   // ── Group persistence ───────────────────────────────────────────────────────

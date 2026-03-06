@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
+import { execSync } from 'child_process';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Plugin } from 'vite';
 
@@ -95,6 +96,99 @@ function makeClient(): Anthropic {
   throw new Error(
     'No Anthropic credentials found. Add ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN to nanoclaw/.env',
   );
+}
+
+// ── Security guardrails ────────────────────────────────────────────────────────
+
+// These patterns are ALWAYS blocked — cannot be overridden by user confirmation.
+const ALWAYS_BLOCKED: Array<[RegExp, string]> = [
+  [/\bsudo\b/, 'privilege escalation not allowed'],
+  [/curl\s+.*\|\s*(bash|sh|zsh)/i, 'piped script execution not allowed'],
+  [/\bdd\s+if=/, 'disk write operations not allowed'],
+  [/\bmkfs\b/, 'filesystem formatting not allowed'],
+  [/>\s*\/(?!(Users|home|tmp|var\/folders))/, 'redirect to system path not allowed'],
+];
+
+// These patterns require explicit user confirmation before running.
+const NEEDS_CONFIRM_PATTERNS: RegExp[] = [
+  /\brm\b/,
+  /\brmdir\b/,
+  /git\s+reset\s+--hard/,
+  /git\s+clean\s+-f/,
+  /launchctl\s+kickstart/,
+  /systemctl\s+.*restart/,
+];
+
+// Fragments that mark a value as secret — stripped from .env before sending to Claude.
+const SECRET_KEY_FRAGMENTS = ['_TOKEN', '_SECRET', '_PASSWORD', 'API_KEY', 'OAUTH'];
+
+function getBlockReason(cmd: string): string | null {
+  for (const [pattern, reason] of ALWAYS_BLOCKED) {
+    if (pattern.test(cmd)) return reason;
+  }
+  return null;
+}
+
+function needsConfirmation(cmd: string): boolean {
+  return NEEDS_CONFIRM_PATTERNS.some((p) => p.test(cmd));
+}
+
+function executeCommand(cmd: string, nanoclawPath: string): { output: string; ok: boolean } {
+  try {
+    const output = execSync(cmd, {
+      cwd: nanoclawPath,
+      timeout: 60_000,
+      maxBuffer: 512 * 1024,
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: process.env.HOME ?? '' },
+    });
+    return { output: String(output).trim() || '(no output)', ok: true };
+  } catch (err: unknown) {
+    const e = err as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
+    const out = e.stdout ? String(e.stdout).trim() : '';
+    const errOut = e.stderr ? String(e.stderr).trim() : (e.message ?? String(err));
+    return { output: [out, errOut].filter(Boolean).join('\n') || String(err), ok: false };
+  }
+}
+
+function readFileSecure(relativePath: string, nanoclawPath: string): string {
+  const resolved = path.resolve(nanoclawPath, relativePath);
+  if (!resolved.startsWith(path.resolve(nanoclawPath))) {
+    return 'ERROR: Path outside nanoclaw directory is not allowed';
+  }
+  try {
+    let content = fs.readFileSync(resolved, 'utf-8');
+    if (path.basename(resolved) === '.env') {
+      content = content.split('\n').map((line) => {
+        const eq = line.indexOf('=');
+        if (eq === -1) return line;
+        const key = line.slice(0, eq);
+        if (SECRET_KEY_FRAGMENTS.some((f) => key.includes(f))) return `${key}=[hidden]`;
+        return line;
+      }).join('\n');
+    }
+    return content.slice(0, 8000);
+  } catch (err) {
+    return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+function writeEnvKey(key: string, value: string, nanoclawPath: string): string {
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) return 'ERROR: Invalid env key format';
+  try {
+    const envPath = path.join(nanoclawPath, '.env');
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf-8'); } catch { /* new */ }
+    const escaped = value.replace(/\n/g, '\\n');
+    const re = new RegExp(`^${key}=.*$`, 'm');
+    content = re.test(content)
+      ? content.replace(re, `${key}=${escaped}`)
+      : content.trimEnd() + (content ? '\n' : '') + `${key}=${escaped}\n`;
+    fs.writeFileSync(envPath, content, 'utf-8');
+    return `Set ${key} in .env`;
+  } catch (err) {
+    return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -229,7 +323,167 @@ Operation types:
 - {"op": "updateNode", "id": "node-5", "data": {"label": "New Name"}}
 - {"op": "deleteNode", "id": "node-5"}
 
-For pure questions with no canvas changes, set "operations" to [].`;
+For pure questions with no canvas changes, set "operations" to [].
+
+## Setup & Installation Mode
+
+You are also a setup assistant. When users want to install channels (Telegram, Slack, WhatsApp), check connection status, configure integrations, or troubleshoot — use your tools to help directly without leaving Blueprint.
+
+Available tools:
+- **run_command** — run shell commands in the nanoclaw directory (npm installs, skill scripts, status checks)
+- **read_file** — read config files (.nanoclaw/state.yaml, .env with secrets auto-hidden, CLAUDE.md)
+- **write_env_key** — safely add or update a key in nanoclaw's .env (use when the user gives you a token)
+
+### Setup workflow
+1. Check state first — read .nanoclaw/state.yaml to see what's installed, check .env for existing tokens
+2. Tell the user what you found before doing anything
+3. Only run what's needed — skip things already installed or configured
+4. For destructive commands (rm, git reset, restart), explain what will happen before running
+5. Verify after running — check that output shows success
+
+### Setup response format
+Same JSON format as always — set "operations" to [] if no canvas changes needed. Your message should summarise what was done and what the user needs to do next (e.g. provide a token). Command output is shown automatically — no need to copy-paste raw terminal output into your message.`;
+
+// ── Claude tool definitions ───────────────────────────────────────────────────
+
+const SETUP_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'run_command',
+    description: 'Run a shell command in the nanoclaw directory. Use for npm installs, skill scripts, status checks, reading logs, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'The shell command to execute' },
+        description: { type: 'string', description: 'Plain-English explanation of what this command does and why' },
+      },
+      required: ['command', 'description'],
+    },
+  },
+  {
+    name: 'read_file',
+    description: 'Read a file relative to the nanoclaw directory. Secrets in .env are auto-hidden.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path relative to nanoclaw, e.g. ".nanoclaw/state.yaml" or "groups/main/CLAUDE.md"' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'write_env_key',
+    description: "Add or update a single key in nanoclaw's .env file. Use when the user provides a token or API key.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'ENV key name, e.g. TELEGRAM_BOT_TOKEN' },
+        value: { type: 'string', description: 'The value to set' },
+        description: { type: 'string', description: 'What this key is for' },
+      },
+      required: ['key', 'value', 'description'],
+    },
+  },
+];
+
+// ── Agentic chat loop with tools ──────────────────────────────────────────────
+
+type CommandLogEntry = { cmd: string; output: string; ok: boolean; description: string };
+
+interface ChatApiResponse {
+  message: string;
+  operations?: unknown[];
+  commandLog?: CommandLogEntry[];
+  pendingCommand?: { cmd: string; description: string };
+}
+
+async function runChatWithTools(
+  messages: Array<{ role: string; content: string }>,
+  graphState: string,
+  confirmedCommands: string[],
+): Promise<ChatApiResponse> {
+  const nanoclawPath = detectNanoclawPath();
+  const client = makeClient();
+  const systemWithGraph = graphState ? `${SYSTEM}\n\n## Current Canvas\n\n${graphState}` : SYSTEM;
+  const commandLog: CommandLogEntry[] = [];
+
+  let apiMessages: Anthropic.MessageParam[] = messages.map((m) => ({
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+  }));
+
+  for (let turn = 0; turn < 12; turn++) {
+    const response = await client.messages.create({
+      model: 'claude-opus-4-6',
+      max_tokens: 4096,
+      system: systemWithGraph,
+      tools: SETUP_TOOLS,
+      tool_choice: { type: 'auto' },
+      messages: apiMessages,
+    });
+
+    if (response.stop_reason !== 'tool_use') {
+      const textBlock = response.content.find((b) => b.type === 'text');
+      const rawText = textBlock?.type === 'text' ? textBlock.text : '{}';
+      const first = rawText.indexOf('{');
+      const last = rawText.lastIndexOf('}');
+      if (first === -1 || last === -1) throw new Error('No JSON in response');
+      const parsed = JSON.parse(rawText.slice(first, last + 1)) as ChatApiResponse;
+      return { ...parsed, commandLog: commandLog.length ? commandLog : undefined };
+    }
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+    for (const block of response.content) {
+      if (block.type !== 'tool_use') continue;
+      let result: string;
+
+      if (block.name === 'run_command') {
+        const inp = block.input as { command: string; description: string };
+        const { command, description } = inp;
+        const blocked = getBlockReason(command);
+        if (blocked) {
+          result = `BLOCKED: ${blocked}`;
+        } else if (needsConfirmation(command) && !confirmedCommands.includes(command)) {
+          return {
+            message: `I need to run a command that requires your approval:\n\n\`${command}\`\n\n${description}`,
+            operations: [],
+            commandLog: commandLog.length ? commandLog : undefined,
+            pendingCommand: { cmd: command, description },
+          };
+        } else if (!nanoclawPath) {
+          result = 'ERROR: Nanoclaw path not configured';
+        } else {
+          const exec = executeCommand(command, nanoclawPath);
+          commandLog.push({ cmd: command, output: exec.output, ok: exec.ok, description });
+          result = exec.ok ? exec.output : `ERROR: ${exec.output}`;
+        }
+      } else if (block.name === 'read_file') {
+        const inp = block.input as { path: string };
+        result = nanoclawPath ? readFileSecure(inp.path, nanoclawPath) : 'ERROR: Nanoclaw path not configured';
+      } else if (block.name === 'write_env_key') {
+        const inp = block.input as { key: string; value: string; description: string };
+        if (!nanoclawPath) {
+          result = 'ERROR: Nanoclaw path not configured';
+        } else {
+          result = writeEnvKey(inp.key, inp.value, nanoclawPath);
+          commandLog.push({ cmd: `Set ${inp.key} in .env`, output: result, ok: !result.startsWith('ERROR'), description: inp.description });
+        }
+      } else {
+        result = 'Unknown tool';
+      }
+
+      toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
+    }
+
+    apiMessages = [
+      ...apiMessages,
+      { role: 'assistant', content: response.content },
+      { role: 'user', content: toolResults },
+    ];
+  }
+
+  return { message: 'The assistant took too many steps. Try a simpler request.', operations: [] };
+}
 
 // ── Body parsing ──────────────────────────────────────────────────────────────
 
@@ -755,34 +1009,15 @@ export function chatPlugin(): Plugin {
 
         try {
           const body = JSON.parse(await readBody(req));
-          const { messages, graphState } = body as {
+          const { messages, graphState, confirmedCommands = [] } = body as {
             messages: Array<{ role: 'user' | 'assistant'; content: string }>;
             graphState: string;
+            confirmedCommands?: string[];
           };
 
-          const client = makeClient();
-
-          const systemWithGraph = graphState
-            ? `${SYSTEM}\n\n## Current Canvas\n\n${graphState}`
-            : SYSTEM;
-
-          const response = await client.messages.create({
-            model: 'claude-opus-4-6',
-            max_tokens: 4096,
-            system: systemWithGraph,
-            messages: messages.map((m) => ({ role: m.role, content: m.content })),
-          });
-
-          const rawText = response.content.find((b) => b.type === 'text')?.text ?? '{}';
-
-          // Extract JSON — find outermost { } to ignore any markdown fences or extra text
-          const first = rawText.indexOf('{');
-          const last = rawText.lastIndexOf('}');
-          if (first === -1 || last === -1) throw new Error('No JSON object found in response');
-          const parsed = JSON.parse(rawText.slice(first, last + 1));
-
+          const result = await runChatWithTools(messages, graphState, confirmedCommands);
           res.writeHead(200);
-          res.end(JSON.stringify(parsed));
+          res.end(JSON.stringify(result));
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error('[chat-plugin]', msg);
