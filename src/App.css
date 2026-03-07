@@ -395,7 +395,7 @@ body {
 .chat-panel__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -407,6 +407,18 @@ body {
   letter-spacing: 0.5px;
   color: var(--accent-agent);
 }
+
+.chat-panel__model-select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: auto;
+}
+.chat-panel__model-select:hover { color: var(--text); }
 
 .chat-panel__clear {
   background: none;

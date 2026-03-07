@@ -40,26 +40,27 @@ interface ToolbarProps {
 }
 
 export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarProps) {
-  const { nodes, addNode, currentGroupFolder, saveStatus, saveCurrentGroup, exportProject, deployToGroup } = useStore();
+  const hasAgentNode = useStore(s => s.nodes.some(n => n.type === 'agent'));
+  const currentGroupFolder = useStore(s => s.currentGroupFolder);
+  const saveStatus = useStore(s => s.saveStatus);
+  const channels = useStore(s => s.channels);
+  const addNode = useStore(s => s.addNode);
+  const saveCurrentGroup = useStore(s => s.saveCurrentGroup);
+  const exportProject = useStore(s => s.exportProject);
+  const deployToGroup = useStore(s => s.deployToGroup);
+  const fetchChannels = useStore(s => s.fetchChannels);
+
   const [deployState, setDeployState] = useState<DeployState>('idle');
   const [deployPreview, setDeployPreview] = useState<string | null>(null);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployActions, setDeployActions] = useState<{ done: string[]; manual: string[] } | null>(null);
-  const [channels, setChannels] = useState<Array<{ jid: string; name: string; folder: string }>>([]);
   const [scheduleChannelJids, setScheduleChannelJids] = useState<Record<string, string>>({});
   const [registeringSchedule, setRegisteringSchedule] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const hasAgentNode = nodes.some(n => n.type === 'agent');
-
-  // Load channels for schedule registration
-  useEffect(() => {
-    fetch('/api/groups/channels')
-      .then(r => r.json())
-      .then(d => setChannels(d.channels ?? []))
-      .catch(() => {/* non-fatal */});
-  }, []);
+  // Load channels for schedule registration (shared via store)
+  useEffect(() => { fetchChannels(); }, [fetchChannels]);
 
   // Cmd+S to save
   useEffect(() => {

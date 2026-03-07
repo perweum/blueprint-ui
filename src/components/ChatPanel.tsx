@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { useStore } from '../store';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useStore, type AssistantModel, type ChatMessage as ChatMessageType } from '../store';
+
+const MODEL_OPTIONS: { value: AssistantModel; label: string }[] = [
+  { value: 'auto',                      label: 'Auto' },
+  { value: 'claude-sonnet-4-6',         label: 'Sonnet' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Haiku' },
+  { value: 'claude-opus-4-6',           label: 'Opus' },
+];
 
 // ── Message renderer ─────────────────────────────────────────────────────────
 
@@ -126,6 +133,58 @@ function WelcomeScreen({ onExample }: { onExample: (text: string) => void }) {
   );
 }
 
+// ── Memoized message row ─────────────────────────────────────────────────────
+
+const ChatMessage = React.memo(function ChatMessage({
+  msg, isChatLoading,
+}: { msg: ChatMessageType; isChatLoading: boolean }) {
+  const renderedContent = useMemo(() => renderMessage(msg.content), [msg.content]);
+  return (
+    <div className={`chat-msg chat-msg--${msg.role}`}>
+      {msg.commandLog && msg.commandLog.length > 0 && (
+        <div className="chat-msg__cmd-log">
+          {msg.commandLog.map((entry, i) => (
+            <div key={i} className={`cmd-entry cmd-entry--${entry.ok ? 'ok' : 'err'}`}>
+              <div className="cmd-entry__header">
+                <span className="cmd-entry__status">{entry.ok ? '✓' : '✗'}</span>
+                <code className="cmd-entry__cmd">{entry.cmd}</code>
+              </div>
+              {entry.output && entry.output !== '(no output)' && (
+                <pre className="cmd-entry__output">{entry.output}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="chat-msg__bubble">
+        {msg.role === 'assistant' ? renderedContent : msg.content}
+        {msg.opsApplied !== undefined && msg.opsApplied > 0 && (
+          <div className="chat-msg__ops">
+            ✦ Applied {msg.opsApplied} canvas operation{msg.opsApplied !== 1 ? 's' : ''}
+          </div>
+        )}
+      </div>
+      {msg.pendingCommand && (
+        <div className="chat-msg__confirm">
+          <div className="chat-msg__confirm-label">Command requires approval:</div>
+          <code className="chat-msg__confirm-cmd">{msg.pendingCommand.cmd}</code>
+          <div className="chat-msg__confirm-actions">
+            <button
+              className="chat-msg__confirm-cancel"
+              onClick={() => useStore.getState().cancelPendingCommand(msg.id)}
+            >Cancel</button>
+            <button
+              className="chat-msg__confirm-approve"
+              onClick={() => useStore.getState().confirmPendingCommand(msg.id)}
+              disabled={isChatLoading}
+            >Approve & run</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 interface ChatPanelProps {
@@ -134,7 +193,10 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ prefill, onPrefillUsed }: ChatPanelProps) {
-  const { chatMessages, isChatLoading, sendChatMessage } = useStore();
+  const chatMessages = useStore(s => s.chatMessages);
+  const isChatLoading = useStore(s => s.isChatLoading);
+  const assistantModel = useStore(s => s.assistantModel);
+  const { sendChatMessage, setAssistantModel } = useStore();
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -169,6 +231,16 @@ export function ChatPanel({ prefill, onPrefillUsed }: ChatPanelProps) {
     <div className="chat-panel">
       <div className="chat-panel__header">
         <span className="chat-panel__title">◈ Assistant</span>
+        <select
+          className="chat-panel__model-select"
+          value={assistantModel}
+          onChange={(e) => setAssistantModel(e.target.value as AssistantModel)}
+          title="AI model for the assistant"
+        >
+          {MODEL_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
         {chatMessages.length > 0 && (
           <button
             className="chat-panel__clear"
@@ -185,52 +257,7 @@ export function ChatPanel({ prefill, onPrefillUsed }: ChatPanelProps) {
         )}
 
         {chatMessages.map((msg) => (
-          <div key={msg.id} className={`chat-msg chat-msg--${msg.role}`}>
-            {msg.commandLog && msg.commandLog.length > 0 && (
-              <div className="chat-msg__cmd-log">
-                {msg.commandLog.map((entry, i) => (
-                  <div key={i} className={`cmd-entry cmd-entry--${entry.ok ? 'ok' : 'err'}`}>
-                    <div className="cmd-entry__header">
-                      <span className="cmd-entry__status">{entry.ok ? '✓' : '✗'}</span>
-                      <code className="cmd-entry__cmd">{entry.cmd}</code>
-                    </div>
-                    {entry.output && entry.output !== '(no output)' && (
-                      <pre className="cmd-entry__output">{entry.output}</pre>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="chat-msg__bubble">
-              {msg.role === 'assistant' ? renderMessage(msg.content) : msg.content}
-              {msg.opsApplied !== undefined && msg.opsApplied > 0 && (
-                <div className="chat-msg__ops">
-                  ✦ Applied {msg.opsApplied} canvas operation{msg.opsApplied !== 1 ? 's' : ''}
-                </div>
-              )}
-            </div>
-            {msg.pendingCommand && (
-              <div className="chat-msg__confirm">
-                <div className="chat-msg__confirm-label">Command requires approval:</div>
-                <code className="chat-msg__confirm-cmd">{msg.pendingCommand.cmd}</code>
-                <div className="chat-msg__confirm-actions">
-                  <button
-                    className="chat-msg__confirm-cancel"
-                    onClick={() => useStore.getState().cancelPendingCommand(msg.id)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="chat-msg__confirm-approve"
-                    onClick={() => useStore.getState().confirmPendingCommand(msg.id)}
-                    disabled={isChatLoading}
-                  >
-                    Approve & run
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          <ChatMessage key={msg.id} msg={msg} isChatLoading={isChatLoading} />
         ))}
 
         {isChatLoading && (

@@ -64,11 +64,18 @@ export interface ChatMessage {
 }
 
 export type SaveStatus = 'idle' | 'unsaved' | 'saving' | 'saved' | 'error';
+export type AssistantModel = 'auto' | 'claude-sonnet-4-6' | 'claude-haiku-4-5-20251001' | 'claude-opus-4-6';
 
 export interface GroupInfo {
   folder: string;
   hasBlueprint: boolean;
   hasClaude: boolean;
+}
+
+export interface ChannelInfo {
+  jid: string;
+  name: string;
+  folder: string;
 }
 
 interface BlueprintStore {
@@ -78,11 +85,15 @@ interface BlueprintStore {
   selectedNodeId: string | null;
   chatMessages: ChatMessage[];
   isChatLoading: boolean;
+  assistantModel: AssistantModel;
+  channels: ChannelInfo[];
 
   currentGroupFolder: string | null;
   saveStatus: SaveStatus;
 
   setProjectName: (name: string) => void;
+  setAssistantModel: (model: AssistantModel) => void;
+  fetchChannels: () => Promise<void>;
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
@@ -105,6 +116,14 @@ interface BlueprintStore {
   importProject: () => void;
 }
 
+const VALID_MODELS: AssistantModel[] = ['auto', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-6'];
+function loadStoredModel(): AssistantModel {
+  try {
+    const stored = localStorage.getItem('assistantModel') as AssistantModel;
+    return VALID_MODELS.includes(stored) ? stored : 'auto';
+  } catch { return 'auto'; }
+}
+
 export const useStore = create<BlueprintStore>((set, get) => ({
   projectName: 'Untitled Project',
   nodes: [],
@@ -112,10 +131,25 @@ export const useStore = create<BlueprintStore>((set, get) => ({
   selectedNodeId: null,
   chatMessages: [],
   isChatLoading: false,
+  assistantModel: loadStoredModel(),
+  channels: [],
   currentGroupFolder: null,
   saveStatus: 'idle',
 
   setProjectName: (name) => set({ projectName: name }),
+
+  setAssistantModel: (model) => {
+    try { localStorage.setItem('assistantModel', model); } catch { /* ignore */ }
+    set({ assistantModel: model });
+  },
+
+  fetchChannels: async () => {
+    try {
+      const r = await fetch('/api/groups/channels');
+      const d = await r.json();
+      set({ channels: d.channels ?? [] });
+    } catch { /* non-fatal */ }
+  },
 
   onNodesChange: (changes) =>
     set((s) => ({
@@ -211,7 +245,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
   },
 
   sendChatMessage: async (text: string) => {
-    const { chatMessages, nodes, edges, applyOperations } = get();
+    const { chatMessages, nodes, edges, applyOperations, assistantModel } = get();
 
     const userMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: text };
     set((s) => ({ chatMessages: [...s.chatMessages, userMsg], isChatLoading: true }));
@@ -223,7 +257,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history, graphState }),
+        body: JSON.stringify({ messages: history, graphState, model: assistantModel }),
       });
 
       if (!res.ok) {
@@ -281,7 +315,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history, graphState, confirmedCommands: [confirmedCmd] }),
+        body: JSON.stringify({ messages: history, graphState, confirmedCommands: [confirmedCmd], model: get().assistantModel }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -387,7 +421,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
       const res = await fetch(`/api/groups/${currentGroupFolder}/blueprint`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(project, null, 2),
+        body: JSON.stringify(project),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));

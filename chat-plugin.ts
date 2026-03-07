@@ -23,6 +23,15 @@ import type { Plugin } from 'vite';
 // Load better-sqlite3 from nanoclaw's node_modules (not bundled in Claw Studio)
 const _require = createRequire(import.meta.url);
 
+// Cached Database constructor — loaded once on first use
+let _Database: (new (path: string, opts?: object) => unknown) | null = null;
+function getDatabase(nanoclawPath: string) {
+  if (!_Database) {
+    _Database = getDatabase(nanoclawPath);
+  }
+  return _Database!;
+}
+
 // ── Nanoclaw path detection ────────────────────────────────────────────────────
 // Claw Studio can live anywhere — we find nanoclaw by:
 //   1. NANOCLAW_PATH env var
@@ -141,22 +150,27 @@ function needsConfirmation(cmd: string): boolean {
   return NEEDS_CONFIRM_PATTERNS.some((p) => p.test(cmd));
 }
 
-function executeCommand(cmd: string, nanoclawPath: string): { output: string; ok: boolean } {
-  try {
-    const output = execSync(cmd, {
+function executeCommand(cmd: string, nanoclawPath: string): Promise<{ output: string; ok: boolean }> {
+  return new Promise((resolve) => {
+    const proc = spawn('bash', ['-c', cmd], {
       cwd: nanoclawPath,
-      timeout: 60_000,
-      maxBuffer: 512 * 1024,
-      encoding: 'utf-8',
       env: { ...process.env, HOME: process.env.HOME ?? '' },
     });
-    return { output: String(output).trim() || '(no output)', ok: true };
-  } catch (err: unknown) {
-    const e = err as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
-    const out = e.stdout ? String(e.stdout).trim() : '';
-    const errOut = e.stderr ? String(e.stderr).trim() : (e.message ?? String(err));
-    return { output: [out, errOut].filter(Boolean).join('\n') || String(err), ok: false };
-  }
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    const timer = setTimeout(() => { proc.kill(); resolve({ output: 'Command timed out after 60s', ok: false }); }, 60_000);
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      const out = stdout.slice(0, 512 * 1024).trim();
+      const err = stderr.slice(0, 512 * 1024).trim();
+      resolve(code === 0
+        ? { output: out || '(no output)', ok: true }
+        : { output: [out, err].filter(Boolean).join('\n') || `Exit code ${code}`, ok: false });
+    });
+    proc.on('error', (err) => { clearTimeout(timer); resolve({ output: err.message, ok: false }); });
+  });
 }
 
 function readFileSecure(relativePath: string, nanoclawPath: string): string {
@@ -543,6 +557,16 @@ const SETUP_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// ── Model selection ───────────────────────────────────────────────────────────
+
+const SETUP_KEYWORDS = /\b(install|setup|set up|configure|add|connect|telegram|slack|whatsapp|discord|gmail|oauth|token|register|troubleshoot|debug|not working|restart|service|skill|error|failed|broken)\b/i;
+
+function resolveModel(model: string, messages: Array<{ role: string; content: string }>): string {
+  if (model !== 'auto') return model;
+  const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content ?? '';
+  return SETUP_KEYWORDS.test(lastUser) ? 'claude-opus-4-6' : 'claude-sonnet-4-6';
+}
+
 // ── Agentic chat loop with tools ──────────────────────────────────────────────
 
 type CommandLogEntry = { cmd: string; output: string; ok: boolean; description: string };
@@ -558,11 +582,13 @@ async function runChatWithTools(
   messages: Array<{ role: string; content: string }>,
   graphState: string,
   confirmedCommands: string[],
+  model = 'auto',
 ): Promise<ChatApiResponse> {
   const nanoclawPath = detectNanoclawPath();
   const client = makeClient();
   const systemWithGraph = graphState ? `${SYSTEM}\n\n## Current Canvas\n\n${graphState}` : SYSTEM;
   const commandLog: CommandLogEntry[] = [];
+  const resolvedModel = resolveModel(model, messages);
 
   let apiMessages: Anthropic.MessageParam[] = messages.map((m) => ({
     role: m.role as 'user' | 'assistant',
@@ -571,7 +597,7 @@ async function runChatWithTools(
 
   for (let turn = 0; turn < 12; turn++) {
     const response = await client.messages.create({
-      model: 'claude-opus-4-6',
+      model: resolvedModel,
       max_tokens: 4096,
       system: systemWithGraph,
       tools: SETUP_TOOLS,
@@ -611,7 +637,7 @@ async function runChatWithTools(
         } else if (!nanoclawPath) {
           result = 'ERROR: Nanoclaw path not configured';
         } else {
-          const exec = executeCommand(command, nanoclawPath);
+          const exec = await executeCommand(command, nanoclawPath);
           commandLog.push({ cmd: command, output: exec.output, ok: exec.ok, description });
           result = exec.ok ? exec.output : `ERROR: ${exec.output}`;
         }
@@ -707,7 +733,7 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
       if (!nanoclawPath) { res.writeHead(503); res.end(JSON.stringify({ error: 'Nanoclaw not found' })); return; }
       const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
       if (!fs.existsSync(DB_PATH)) { res.writeHead(200); res.end(JSON.stringify({ channels: [] })); return; }
-      const Database = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+      const Database = getDatabase(nanoclawPath);
       const db = new Database(DB_PATH, { readonly: true });
       const rows = db.prepare('SELECT jid, name, folder FROM registered_groups WHERE jid NOT LIKE \'scheduled:%\' ORDER BY name').all() as Array<{ jid: string; name: string; folder: string }>;
       db.close();
@@ -750,7 +776,7 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
           if (nanoclawPath) {
             const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
             if (fs.existsSync(DB_PATH)) {
-              const Database = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+              const Database = getDatabase(nanoclawPath);
               const db = new Database(DB_PATH);
               db.prepare(`
                 INSERT OR IGNORE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main, container_config)
@@ -781,7 +807,7 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
       const nanoclawPath = detectNanoclawPath();
       if (!nanoclawPath) { res.writeHead(503); res.end(JSON.stringify({ error: 'Nanoclaw not found' })); return; }
       const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
-      const Database = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+      const Database = getDatabase(nanoclawPath);
       const db = new Database(DB_PATH);
       const displayName = folder.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
       db.prepare(`
@@ -1336,13 +1362,14 @@ export function chatPlugin(): Plugin {
 
         try {
           const body = JSON.parse(await readBody(req));
-          const { messages, graphState, confirmedCommands = [] } = body as {
+          const { messages, graphState, confirmedCommands = [], model = 'auto' } = body as {
             messages: Array<{ role: 'user' | 'assistant'; content: string }>;
             graphState: string;
             confirmedCommands?: string[];
+            model?: string;
           };
 
-          const result = await runChatWithTools(messages, graphState, confirmedCommands);
+          const result = await runChatWithTools(messages, graphState, confirmedCommands, model);
           res.writeHead(200);
           res.end(JSON.stringify(result));
         } catch (err) {

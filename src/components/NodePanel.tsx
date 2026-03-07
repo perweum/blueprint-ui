@@ -248,20 +248,22 @@ function HelpText({ children }: { children: string }) {
 
 // ── Main NodePanel ──────────────────────────────────────────────────────────
 export function NodePanel() {
-  const { nodes, selectedNodeId, selectNode, updateNodeData, deleteNode } = useStore();
+  const selectedNodeId = useStore(s => s.selectedNodeId);
+  const node = useStore(s => s.selectedNodeId ? (s.nodes.find(n => n.id === s.selectedNodeId) ?? null) : null);
+  const selectNode = useStore(s => s.selectNode);
+  const updateNodeData = useStore(s => s.updateNodeData);
+  const deleteNode = useStore(s => s.deleteNode);
   const [customCronMode, setCustomCronMode] = useState(false);
 
   // When selected node changes, derive whether it already has a custom cron
   useEffect(() => {
-    const d = nodes.find(n => n.id === selectedNodeId)?.data as BlueprintNodeData | undefined;
+    const d = node?.data as BlueprintNodeData | undefined;
     setCustomCronMode(
       d?.kind === 'trigger' &&
       !!(d as { config?: string }).config &&
       !SCHEDULE_PRESETS.some(p => p.cron === (d as { config?: string }).config)
     );
   }, [selectedNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const node = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null;
   const isOpen = !!node;
   const data = node?.data as BlueprintNodeData | undefined;
   const update = (patch: Partial<BlueprintNodeData>) => {
