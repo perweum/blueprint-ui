@@ -77,6 +77,14 @@ On first launch, the setup wizard will:
 2. Ask for your Anthropic API key
 3. Offer to create your first bot immediately
 
+### Updating
+
+Re-run the install script. It will pull the latest code, update dependencies, and leave your bots and settings untouched:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/perweum/claw-studio/main/install.sh | bash
+```
+
 ### Manual install (for developers)
 
 ```bash
