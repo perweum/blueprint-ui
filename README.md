@@ -1,6 +1,10 @@
-# Claw Studio
+<div align="center">
+  <img src="logo.svg" width="120" alt="Claw Studio" />
+  <h1>Claw Studio</h1>
+  <p>Visual AI agent builder for <a href="https://github.com/nanoclaw-ai/nanoclaw">nanoclaw</a> — no code required.</p>
+</div>
 
-> Visual AI agent builder for [nanoclaw](https://github.com/nanoclaw-ai/nanoclaw) — no code required.
+---
 
 Claw Studio lets you design, configure, and deploy personal AI bots using a drag-and-drop canvas. Connect nodes that represent triggers, agents, tools, memory, and outputs. When you're happy with the design, hit **Deploy** and Claw Studio writes the configuration directly to nanoclaw.
 

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#1a1a3e"/>
+      <stop offset="100%" stop-color="#0d0d1a"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softshadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="28" flood-color="#3b82f6" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+
+  <!-- Glow blob behind symbol -->
+  <ellipse cx="512" cy="512" rx="310" ry="310" fill="url(#glow)"/>
+
+  <!-- ◈ — outer diamond outline -->
+  <polygon
+    points="512,155 857,512 512,857 167,512"
+    fill="none"
+    stroke="#3b82f6"
+    stroke-width="54"
+    stroke-linejoin="miter"
+    filter="url(#softshadow)"
+  />
+
+  <!-- ◈ — inner filled diamond -->
+  <polygon
+    points="512,388 624,512 512,624 400,512"
+    fill="#3b82f6"
+    filter="url(#softshadow)"
+  />
+</svg>
