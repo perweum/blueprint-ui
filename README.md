@@ -28,32 +28,42 @@ Claw Studio lets you design, configure, and deploy personal AI bots using a drag
 
 ## Requirements
 
-- [nanoclaw](https://github.com/nanoclaw-ai/nanoclaw) installed and running
-- Node.js 18+
-- An [Anthropic API key](https://console.anthropic.com/settings/keys) (for the AI assistant and your bots)
+- macOS (Apple Silicon or Intel)
+- An [Anthropic API key](https://console.anthropic.com/settings/keys) — get one free at console.anthropic.com
+
+Everything else (Node.js, nanoclaw, Docker or Apple Container) is installed automatically.
 
 ---
 
 ## Installation
 
+### Option 1 — macOS App (easiest)
+
+[**Download Claw Studio.dmg**](https://github.com/perweum/claw-studio/releases/latest) → open it → drag to Applications → double-click to launch.
+
+> First launch: macOS may warn the app is unsigned. Right-click → **Open** → **Open** to allow it once.
+
+### Option 2 — One-line terminal install
+
 ```bash
-# Clone into your nanoclaw Projects folder (or anywhere you like)
-git clone https://github.com/perweum/claw-studio.git
-cd claw-studio
-
-# Install dependencies
-npm install
-
-# Start the dev server
-npm run dev
+curl -fsSL https://raw.githubusercontent.com/perweum/claw-studio/main/install.sh | bash
 ```
 
-Open the URL shown in your terminal (usually `http://localhost:5173`) in your browser.
+Both options will install nanoclaw and all dependencies automatically if they aren't already present, then open Claw Studio in your browser.
 
 On first launch, the setup wizard will:
-1. Auto-detect your nanoclaw installation (or let you enter the path manually)
-2. Ask for your Anthropic API key if not already configured
+1. Confirm your nanoclaw installation (auto-detected in most cases)
+2. Ask for your Anthropic API key
 3. Offer to create your first bot immediately
+
+### Manual install (for developers)
+
+```bash
+git clone https://github.com/perweum/claw-studio.git
+cd claw-studio
+npm install
+npm run dev
+```
 
 ---
 
