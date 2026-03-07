@@ -121,6 +121,128 @@ Click the **⋯** menu in the top-right of the toolbar → **Back up all bots**.
 
 ---
 
+## Built-in Presets
+
+The AI assistant knows how to build these integrations out of the box — just describe what you want in the chat. No extra installs or API keys needed for the ones marked **free**.
+
+<details>
+<summary><strong>🌤 Weather &amp; Environment</strong> — yr.no forecasts, air quality, auto-location</summary>
+
+**Weather forecast** (free, no API key — yr.no / MET Norway)
+
+Ask: *"Add a weather tool for Oslo"* or *"Build a morning briefing with today's weather"*
+
+The assistant uses yr.no, the Norwegian Meteorological Institute's free open-data API. Just say the city name — no API key, no sign-up.
+
+**Air quality** works the same way — ask for PM2.5, pollen, or air quality index alongside the weather.
+
+**Auto-location weather** — the assistant can combine IP geolocation with yr.no so the forecast automatically uses the machine's current location without the user setting a city.
+
+</details>
+
+<details>
+<summary><strong>📍 IP Geolocation</strong> — detect current city and coordinates automatically</summary>
+
+**Free, no API key** — uses ip-api.com
+
+Ask: *"Detect my location automatically"* or *"Use my current location for the weather"*
+
+Returns city, region, country, latitude, and longitude from the machine's public IP. Most useful as a companion to the weather preset — the bot finds your location and fetches the forecast without any configuration.
+
+</details>
+
+<details>
+<summary><strong>📰 RSS &amp; News Feeds</strong> — any blog, podcast, subreddit, YouTube channel</summary>
+
+**Free, no API key**
+
+Ask: *"Add an RSS feed for Hacker News"* or *"Follow this blog: [URL]"*
+
+Works with any RSS or Atom feed. Common sources the assistant knows about:
+
+| Source | How to ask |
+|--------|-----------|
+| Hacker News | *"Add Hacker News top stories"* |
+| Reddit | *"Follow r/MachineLearning"* |
+| YouTube channel | *"Add YouTube feed for [channel name]"* |
+| Any blog | *"Follow [blog URL]"* — most blogs have /feed or /rss |
+| Podcast | Paste the podcast's RSS URL |
+
+</details>
+
+<details>
+<summary><strong>📅 Calendar &amp; Scheduling</strong> — Apple Calendar, iCal feeds, public holidays</summary>
+
+**Apple Calendar** (free, macOS only — reads all accounts synced to Calendar.app)
+
+Ask: *"Read my calendar for today"* or *"Add today's meetings to my morning briefing"*
+
+Reads events from all calendars in Calendar.app — iCloud, Google, Outlook, Exchange — without needing any URLs or OAuth. May prompt for Calendars access in System Settings on first use.
+
+---
+
+**iCal feeds** (free — Outlook, Fastmail, Airbnb, any .ics URL)
+
+Ask: *"Add my work calendar"* and paste the iCal/ICS URL
+
+Works with any service that provides an ICS link, including Outlook Web, Fastmail, Apple Calendar sharing, Airbnb reservations, and sports schedules.
+
+---
+
+**Public holidays** (free — date.nager.at)
+
+Ask: *"Skip the morning briefing on public holidays"* or *"Add Norwegian public holidays"*
+
+Supports 100+ countries (NO, SE, DK, US, GB, DE, FR, …). Useful combined with schedule triggers so bots automatically skip running on national holidays.
+
+</details>
+
+<details>
+<summary><strong>🍎 macOS Native — Reminders</strong></summary>
+
+**Apple Reminders** (free, macOS only)
+
+Ask: *"Read my reminders"* or *"Create a reminder when the bot finishes"*
+
+Reads incomplete reminders from Reminders.app and can create new ones. Works with iCloud-synced reminders so they appear on iPhone too. May prompt for Reminders access in System Settings on first use.
+
+</details>
+
+<details>
+<summary><strong>💱 Finance — Exchange Rates</strong></summary>
+
+**Free, no API key** — open.er-api.com, updates hourly
+
+Ask: *"Add today's exchange rates to my briefing"* or *"Show USD, EUR, and NOK rates"*
+
+Supports all major currencies. The user can set any base currency (USD, EUR, NOK, etc.).
+
+</details>
+
+<details>
+<summary><strong>🔔 Push Notifications — ntfy.sh</strong></summary>
+
+**Free for basic use** — ntfy.sh, no account needed
+
+Ask: *"Send me a push notification when the bot runs"*
+
+The bot sends alerts to the user's phone via the free ntfy app (iOS + Android). The user picks a topic name and subscribes in the app — no account or API key required for basic use. Self-hostable for privacy.
+
+</details>
+
+<details>
+<summary><strong>📧 Gmail &amp; Google Calendar</strong> — OAuth, skill required</summary>
+
+Gmail and Google Calendar are available via the `/add-gmail` skill in nanoclaw. Once installed, the assistant can read emails, send replies, draft messages, and read calendar events.
+
+Ask in the chat: *"Set up Gmail"* — the assistant will walk through the setup.
+
+OAuth is handled automatically — no API key is ever stored in the node config.
+
+</details>
+
+---
+
 ## Project Structure
 
 ```

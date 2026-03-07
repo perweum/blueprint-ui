@@ -295,12 +295,16 @@ Once all steps are done, save this blueprint and your bot is ready."
 
 ## MCP Tool Config Guidelines
 
-## Free Data Sources (no API key needed)
+## Built-in Data Presets (bash tools, no API key needed)
+
+All of these use bash tool nodes. Never use MCP for these — just curl or osascript.
+
+---
 
 **Weather & Air Quality — yr.no / MET Norway**
-Use a **bash tool** (not MCP) for weather. yr.no is free, open data (CC BY 4.0), requires no API key — just a User-Agent header.
+Use a **bash tool** for weather. yr.no is free, CC BY 4.0, no API key needed.
 
-Weather forecast bash command:
+Weather forecast (city name):
 ~~~
 CITY="Oslo, Norway"
 COORDS=$(curl -s -A "nanoclaw/1.0" "https://nominatim.openstreetmap.org/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$CITY'))")&format=json&limit=1" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['lat'], d[0]['lon'])")
@@ -308,9 +312,133 @@ LAT=$(echo $COORDS | awk '{print $1}'); LON=$(echo $COORDS | awk '{print $2}')
 curl -s -A "nanoclaw/1.0" "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=$LAT&lon=$LON"
 ~~~
 
-Air quality bash command (same pattern but endpoint: https://api.met.no/weatherapi/airqualityforecast/0.1/?lat=$LAT&lon=$LON)
+Air quality: same pattern, endpoint https://api.met.no/weatherapi/airqualityforecast/0.1/?lat=$LAT&lon=$LON
 
-When a user asks for a weather or air quality pipeline, ALWAYS use the yr.no bash approach — tell them to change the CITY variable. Do NOT suggest OpenWeatherMap or any API-key-based weather service unless the user specifically asks for it.
+When a user asks for weather or air quality, ALWAYS use yr.no. Do NOT suggest OpenWeatherMap unless asked.
+
+---
+
+**IP Geolocation — auto-detect location (no API key)**
+Use this to get the user's current city and coordinates automatically — useful to make weather dynamic without the user having to set a city name.
+~~~
+curl -s "http://ip-api.com/json" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'City: {d[\"city\"]}, {d[\"regionName\"]}, {d[\"country\"]}')
+print(f'Lat: {d[\"lat\"]}')
+print(f'Lon: {d[\"lon\"]}')
+print(f'IP: {d[\"query\"]}')
+"
+~~~
+
+Combine with yr.no for a fully automatic weather forecast with no configuration:
+~~~
+LOCATION=$(curl -s "http://ip-api.com/json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['lat'], d['lon'])")
+LAT=$(echo $LOCATION | awk '{print $1}'); LON=$(echo $LOCATION | awk '{print $2}')
+curl -s -A "nanoclaw/1.0" "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=$LAT&lon=$LON"
+~~~
+
+---
+
+**RSS / Atom Feeds — any blog, podcast, news site, subreddit, YouTube channel**
+~~~
+FEED_URL="https://hnrss.org/frontpage"
+curl -s "$FEED_URL" | python3 -c "
+import sys, xml.etree.ElementTree as ET
+root = ET.fromstring(sys.stdin.read())
+items = root.findall('.//item')[:10]
+for item in items:
+    title = item.findtext('title','').strip()
+    link = item.findtext('link','').strip()
+    print(f'- {title}\n  {link}')
+"
+~~~
+The user can change FEED_URL to any RSS/Atom feed. Common examples:
+- Hacker News: https://hnrss.org/frontpage
+- Reddit: https://www.reddit.com/r/SUBREDDIT/.rss
+- YouTube channel: https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID
+- Any blog with /feed or /rss in the URL
+
+---
+
+**Public Holidays — skip briefings on holidays**
+~~~
+COUNTRY="NO"
+YEAR=$(date +%Y)
+curl -s "https://date.nager.at/api/v3/PublicHolidays/$YEAR/$COUNTRY" | python3 -c "
+import sys, json, datetime
+holidays = json.load(sys.stdin)
+today = datetime.date.today().isoformat()
+for h in holidays:
+    print(f'{h[\"date\"]}: {h[\"localName\"]}')
+    if h['date'] == today:
+        print('TODAY IS A PUBLIC HOLIDAY')
+"
+~~~
+Country codes: NO, SE, DK, US, GB, DE, FR, etc. Useful combined with schedule triggers to skip running on holidays.
+
+---
+
+**Exchange Rates — currency conversion (no API key)**
+~~~
+BASE="USD"
+curl -s "https://open.er-api.com/v6/latest/$BASE" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+rates = data['rates']
+for currency in ['EUR', 'GBP', 'NOK', 'SEK', 'DKK', 'JPY', 'CHF', 'USD']:
+    if currency in rates:
+        print(f'{currency}: {rates[currency]:.4f}')
+"
+~~~
+Free tier, no API key, updates hourly. User can change BASE to any currency code.
+
+---
+
+**Push Notifications — ntfy.sh (no API key for basic use)**
+Use a bash output tool to send push notifications to the user's phone. The user subscribes to their topic in the ntfy app (iOS/Android, free).
+~~~
+TOPIC="my-nanoclaw-alerts"
+MESSAGE="Your alert message here"
+curl -s -d "$MESSAGE" https://ntfy.sh/$TOPIC
+~~~
+Tell the user to pick a unique topic name and install the ntfy app, then subscribe to ntfy.sh/TOPIC. No account needed for basic use.
+
+---
+
+**Apple Calendar — read macOS Calendar.app events (no API key, macOS only)**
+Use osascript to read the user's local Apple Calendar. Works with all calendar accounts synced to Calendar.app (iCloud, Google, Exchange, etc.) without needing any URLs or OAuth.
+~~~
+osascript << 'APPLESCRIPT'
+tell application "Calendar"
+  set today to current date
+  set midnight to today - (time of today)
+  set tomorrow to midnight + (24 * 60 * 60)
+  set result to {}
+  repeat with c in calendars
+    set evts to (every event of c whose start date >= midnight and start date < tomorrow)
+    repeat with e in evts
+      set end of result to ((summary of e) & " at " & ((start date of e) as string))
+    end repeat
+  end repeat
+  return result
+end tell
+APPLESCRIPT
+~~~
+Tell the user they may need to grant Calendar access in System Settings → Privacy & Security → Calendars. To get events for a different day, adjust midnight and tomorrow.
+
+---
+
+**Apple Reminders — read and create reminders (no API key, macOS only)**
+~~~
+# List incomplete reminders
+osascript -e 'tell application "Reminders" to get name of every reminder whose completed is false'
+~~~
+~~~
+# Create a reminder (change the name and due date as needed)
+osascript -e 'tell application "Reminders" to make new reminder with properties {name:"Task from bot", due date:current date + 3600}'
+~~~
+May require Reminders access in System Settings → Privacy & Security → Reminders.
 
 ## MCP Tool Config Guidelines
 
