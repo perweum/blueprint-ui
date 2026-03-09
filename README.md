@@ -348,6 +348,7 @@ claw-studio/
 │   │   ├── ChatPanel.tsx       # AI assistant sidebar (left)
 │   │   ├── NodePanel.tsx       # Node settings panel (right, opens on selection)
 │   │   ├── Toolbar.tsx         # Top bar — bots, deploy, run now, palette, backup
+│   │   ├── StatusPanel.tsx     # Live system status — all bots, next/last run, Run Now
 │   │   ├── GroupPicker.tsx     # Bot selector / new bot modal
 │   │   ├── SetupWizard.tsx     # First-run wizard
 │   │   ├── CommandPalette.tsx  # Node type picker (Cmd+K)
@@ -382,6 +383,7 @@ claw-studio/
 | `POST /api/groups/:folder/deploy` | Generate CLAUDE.md + register schedules |
 | `POST /api/groups/:folder/run` | Trigger scheduled tasks immediately (Run now) |
 | `GET /api/groups/:folder/runs` | Get recent run history and last run status |
+| `GET /api/status` | Live status for all bots — next run, last run, warnings |
 | `POST /api/groups/:folder/register` | Register a group with a channel JID |
 | `POST /api/chat` | Run the AI assistant (agentic loop with tools) |
 | `GET /api/templates` | List starter blueprint templates |
@@ -508,7 +510,7 @@ Contributions are welcome! A few things to know:
 - The canvas is **React Flow** (`@xyflow/react`)
 - The backend plugin (`chat-plugin.ts`) runs inside the Vite dev server — no Express or separate server
 - nanoclaw's `better-sqlite3` is loaded via `createRequire` from nanoclaw's own `node_modules`
-- The AI chat uses an agentic loop (up to 12 turns) with three tools: `run_command`, `read_file`, `write_env_key`
+- The AI chat uses an agentic loop (up to 40 turns) with three tools: `run_command`, `read_file`, `write_env_key`
 
 ```bash
 npm install && npm run dev   # develop
