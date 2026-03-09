@@ -22,6 +22,62 @@ function nextMsgId() {
   return `msg-${++msgCounter}`;
 }
 
+// ── Local persistence helpers ─────────────────────────────────────────────────
+
+type CanvasSnapshot = { nodes: Node<BlueprintNodeData>[]; edges: Edge[] };
+
+const LS_LAST_GROUP = 'cs:lastGroup';
+const LS_DRAFT_PREFIX = 'cs:draft:';
+const SS_CHAT = 'cs:chat';
+
+function lsGet(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function lsSet(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch { /* ignore */ }
+}
+function lsDel(key: string) {
+  try { localStorage.removeItem(key); } catch { /* ignore */ }
+}
+function ssGet(key: string): string | null {
+  try { return sessionStorage.getItem(key); } catch { return null; }
+}
+function ssSet(key: string, value: string) {
+  try { sessionStorage.setItem(key, value); } catch { /* ignore */ }
+}
+
+function saveDraft(folder: string, snapshot: CanvasSnapshot) {
+  lsSet(LS_DRAFT_PREFIX + folder, JSON.stringify(snapshot));
+}
+function loadDraft(folder: string): CanvasSnapshot | null {
+  try {
+    const raw = lsGet(LS_DRAFT_PREFIX + folder);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function clearDraft(folder: string) {
+  lsDel(LS_DRAFT_PREFIX + folder);
+}
+
+function loadSessionChat(): ChatMessage[] {
+  try {
+    const raw = ssGet(SS_CHAT);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+function saveSessionChat(messages: ChatMessage[]) {
+  ssSet(SS_CHAT, JSON.stringify(messages.slice(-100)));
+}
+
+// Inline history push — returns the partial state update for past/future
+function withHistoryPush(s: { past: CanvasSnapshot[]; future: CanvasSnapshot[]; nodes: Node<BlueprintNodeData>[]; edges: Edge[] }) {
+  const snap: CanvasSnapshot = { nodes: s.nodes, edges: s.edges };
+  return {
+    past: [...s.past, snap].slice(-50),
+    future: [] as CanvasSnapshot[],
+  };
+}
+
 function defaultData(kind: NodeKind): BlueprintNodeData {
   switch (kind) {
     case 'agent':
@@ -61,6 +117,7 @@ export interface ChatMessage {
   opsApplied?: number;
   commandLog?: CommandLogEntry[];
   pendingCommand?: { cmd: string; description: string } | null;
+  options?: string[];
 }
 
 export type SaveStatus = 'idle' | 'unsaved' | 'saving' | 'saved' | 'error';
@@ -85,11 +142,23 @@ interface BlueprintStore {
   selectedNodeId: string | null;
   chatMessages: ChatMessage[];
   isChatLoading: boolean;
+  chatLoadingCmd: string | null;  // description of the currently-running command, if any
   assistantModel: AssistantModel;
   channels: ChannelInfo[];
 
   currentGroupFolder: string | null;
   saveStatus: SaveStatus;
+
+  // Undo/redo
+  past: CanvasSnapshot[];
+  future: CanvasSnapshot[];
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
+
+  // Draft persistence
+  saveDraftNow: () => void;
 
   setProjectName: (name: string) => void;
   setAssistantModel: (model: AssistantModel) => void;
@@ -129,12 +198,46 @@ export const useStore = create<BlueprintStore>((set, get) => ({
   nodes: [],
   edges: [],
   selectedNodeId: null,
-  chatMessages: [],
+  chatMessages: loadSessionChat(),
   isChatLoading: false,
+  chatLoadingCmd: null,
   assistantModel: loadStoredModel(),
   channels: [],
   currentGroupFolder: null,
   saveStatus: 'idle',
+
+  // Undo/redo initial state
+  past: [],
+  future: [],
+  canUndo: false,
+  canRedo: false,
+
+  undo: () => {
+    set((s) => {
+      if (s.past.length === 0) return s;
+      const prev = s.past[s.past.length - 1];
+      const newPast = s.past.slice(0, -1);
+      const newFuture = [{ nodes: s.nodes, edges: s.edges }, ...s.future].slice(0, 50);
+      if (s.currentGroupFolder) saveDraft(s.currentGroupFolder, prev);
+      return { ...prev, past: newPast, future: newFuture, canUndo: newPast.length > 0, canRedo: true, saveStatus: s.currentGroupFolder ? 'unsaved' : s.saveStatus };
+    });
+  },
+
+  redo: () => {
+    set((s) => {
+      if (s.future.length === 0) return s;
+      const next = s.future[0];
+      const newFuture = s.future.slice(1);
+      const newPast = [...s.past, { nodes: s.nodes, edges: s.edges }].slice(-50);
+      if (s.currentGroupFolder) saveDraft(s.currentGroupFolder, next);
+      return { ...next, past: newPast, future: newFuture, canUndo: true, canRedo: newFuture.length > 0, saveStatus: s.currentGroupFolder ? 'unsaved' : s.saveStatus };
+    });
+  },
+
+  saveDraftNow: () => {
+    const { currentGroupFolder, nodes, edges } = get();
+    if (currentGroupFolder) saveDraft(currentGroupFolder, { nodes, edges });
+  },
 
   setProjectName: (name) => set({ projectName: name }),
 
@@ -158,24 +261,35 @@ export const useStore = create<BlueprintStore>((set, get) => ({
     })),
 
   onEdgesChange: (changes) =>
-    set((s) => ({
-      edges: applyEdgeChanges(changes, s.edges),
-      saveStatus: s.currentGroupFolder ? 'unsaved' : s.saveStatus,
-    })),
+    set((s) => {
+      const hasRemove = changes.some((c) => c.type === 'remove');
+      return {
+        ...(hasRemove ? withHistoryPush(s) : {}),
+        edges: applyEdgeChanges(changes, s.edges),
+        saveStatus: s.currentGroupFolder ? 'unsaved' : s.saveStatus,
+        ...(hasRemove ? { canUndo: true, canRedo: false } : {}),
+      };
+    }),
 
   onConnect: (connection) =>
     set((s) => ({
+      ...withHistoryPush(s),
       edges: addEdge({ ...connection, animated: true }, s.edges),
       saveStatus: s.currentGroupFolder ? 'unsaved' : s.saveStatus,
+      canUndo: true,
+      canRedo: false,
     })),
 
   addNode: (kind, position = { x: 200 + Math.random() * 200, y: 150 + Math.random() * 200 }) => {
     const id = nextId();
     const node: Node<BlueprintNodeData> = { id, type: kind, position, data: defaultData(kind) };
     set((s) => ({
+      ...withHistoryPush(s),
       nodes: [...s.nodes, node],
       selectedNodeId: id,
       saveStatus: s.currentGroupFolder ? 'unsaved' : s.saveStatus,
+      canUndo: true,
+      canRedo: false,
     }));
   },
 
@@ -191,10 +305,13 @@ export const useStore = create<BlueprintStore>((set, get) => ({
 
   deleteNode: (id) =>
     set((s) => ({
+      ...withHistoryPush(s),
       nodes: s.nodes.filter((n) => n.id !== id),
       edges: s.edges.filter((e) => e.source !== id && e.target !== id),
       selectedNodeId: s.selectedNodeId === id ? null : s.selectedNodeId,
       saveStatus: s.currentGroupFolder ? 'unsaved' : s.saveStatus,
+      canUndo: true,
+      canRedo: false,
     })),
 
   applyOperations: (ops) => {
@@ -202,6 +319,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
     let opsApplied = 0;
 
     set((state) => {
+      const history = withHistoryPush(state);
       let nodes = [...state.nodes];
       let edges = [...state.edges];
 
@@ -235,9 +353,12 @@ export const useStore = create<BlueprintStore>((set, get) => ({
       }
 
       return {
+        ...history,
         nodes,
         edges,
         saveStatus: state.currentGroupFolder ? 'unsaved' : state.saveStatus,
+        canUndo: true,
+        canRedo: false,
       };
     });
 
@@ -248,7 +369,11 @@ export const useStore = create<BlueprintStore>((set, get) => ({
     const { chatMessages, nodes, edges, applyOperations, assistantModel } = get();
 
     const userMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: text };
-    set((s) => ({ chatMessages: [...s.chatMessages, userMsg], isChatLoading: true }));
+    set((s) => {
+      const msgs = [...s.chatMessages, userMsg];
+      saveSessionChat(msgs);
+      return { chatMessages: msgs, isChatLoading: true };
+    });
 
     const graphState = buildGraphSummary(nodes, edges);
     const history = [...chatMessages, userMsg].map((m) => ({ role: m.role, content: m.content }));
@@ -260,32 +385,77 @@ export const useStore = create<BlueprintStore>((set, get) => ({
         body: JSON.stringify({ messages: history, graphState, model: assistantModel }),
       });
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
 
-      const data = await res.json();
-      const opsApplied = data.operations?.length ? applyOperations(data.operations) : 0;
+      // Read NDJSON stream — each line is a JSON event
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let gotResult = false;
+      let streamError: string | null = null;
 
-      const assistantMsg: ChatMessage = {
-        id: nextMsgId(),
-        role: 'assistant',
-        content: data.message,
-        opsApplied,
-        commandLog: data.commandLog,
-        pendingCommand: data.pendingCommand,
-      };
-      set((s) => ({ chatMessages: [...s.chatMessages, assistantMsg] }));
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let event: Record<string, unknown>;
+          try {
+            event = JSON.parse(trimmed) as Record<string, unknown>;
+          } catch {
+            continue; // genuinely malformed JSON line — skip
+          }
+          if (event.type === 'running') {
+            set({ chatLoadingCmd: (event.description as string) || (event.cmd as string) });
+          } else if (event.type === 'result') {
+            const opsApplied = Array.isArray(event.operations) && event.operations.length
+              ? applyOperations(event.operations as Parameters<typeof applyOperations>[0])
+              : 0;
+            const assistantMsg: ChatMessage = {
+              id: nextMsgId(),
+              role: 'assistant',
+              content: event.message as string,
+              opsApplied,
+              commandLog: event.commandLog as ChatMessage['commandLog'],
+              pendingCommand: event.pendingCommand as ChatMessage['pendingCommand'],
+              options: event.options as string[] | undefined,
+            };
+            set((s) => {
+              const msgs = [...s.chatMessages, assistantMsg];
+              saveSessionChat(msgs);
+              return { chatMessages: msgs };
+            });
+            gotResult = true;
+          } else if (event.type === 'error') {
+            streamError = (event.error as string) || 'Unknown error';
+          }
+        }
+      }
+
+      if (!gotResult) {
+        throw new Error(streamError ?? 'No response received — the assistant may still be working. Try asking again.');
+      }
     } catch (err) {
       const errorMsg: ChatMessage = {
         id: nextMsgId(),
         role: 'assistant',
         content: `Error: ${err instanceof Error ? err.message : String(err)}`,
       };
-      set((s) => ({ chatMessages: [...s.chatMessages, errorMsg] }));
+      set((s) => {
+        const msgs = [...s.chatMessages, errorMsg];
+        saveSessionChat(msgs);
+        return { chatMessages: msgs };
+      });
     } finally {
-      set({ isChatLoading: false });
+      set({ isChatLoading: false, chatLoadingCmd: null });
     }
   },
 
@@ -317,27 +487,57 @@ export const useStore = create<BlueprintStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: history, graphState, confirmedCommands: [confirmedCmd], model: get().assistantModel }),
       });
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const e = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         throw new Error((e as { error?: string }).error ?? `HTTP ${res.status}`);
       }
-      const data = await res.json() as {
-        message: string;
-        operations?: Operation[];
-        commandLog?: CommandLogEntry[];
-        pendingCommand?: { cmd: string; description: string };
-      };
-      const opsApplied = data.operations?.length ? applyOperations(data.operations) : 0;
-      set((s) => ({
-        chatMessages: [...s.chatMessages, {
-          id: nextMsgId(),
-          role: 'assistant' as const,
-          content: data.message,
-          opsApplied,
-          commandLog: data.commandLog,
-          pendingCommand: data.pendingCommand,
-        }],
-      }));
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let gotResult = false;
+      let streamError: string | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let event: Record<string, unknown>;
+          try { event = JSON.parse(trimmed) as Record<string, unknown>; }
+          catch { continue; }
+          if (event.type === 'running') {
+            set({ chatLoadingCmd: (event.description as string) || (event.cmd as string) });
+          } else if (event.type === 'result') {
+            const opsApplied = Array.isArray(event.operations) && event.operations.length
+              ? applyOperations(event.operations as Operation[])
+              : 0;
+            set((s) => ({
+              chatMessages: [...s.chatMessages, {
+                id: nextMsgId(),
+                role: 'assistant' as const,
+                content: event.message as string,
+                opsApplied,
+                commandLog: event.commandLog as CommandLogEntry[] | undefined,
+                pendingCommand: event.pendingCommand as { cmd: string; description: string } | undefined,
+                options: event.options as string[] | undefined,
+              }],
+            }));
+            gotResult = true;
+          } else if (event.type === 'error') {
+            streamError = (event.error as string) || 'Unknown error';
+          }
+        }
+      }
+
+      if (!gotResult) {
+        throw new Error(streamError ?? 'No response received — try asking again.');
+      }
     } catch (err) {
       set((s) => ({
         chatMessages: [...s.chatMessages, {
@@ -347,7 +547,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
         }],
       }));
     } finally {
-      set({ isChatLoading: false });
+      set({ isChatLoading: false, chatLoadingCmd: null });
     }
   },
 
@@ -381,12 +581,19 @@ export const useStore = create<BlueprintStore>((set, get) => ({
   },
 
   openGroup: async (folder: string) => {
-    set({ currentGroupFolder: folder, projectName: folder, saveStatus: 'idle', selectedNodeId: null });
+    lsSet(LS_LAST_GROUP, folder);
+    set({ currentGroupFolder: folder, projectName: folder, saveStatus: 'idle', selectedNodeId: null, past: [], future: [], canUndo: false, canRedo: false });
 
     try {
       const res = await fetch(`/api/groups/${folder}/blueprint`);
       if (res.status === 404) {
-        set({ nodes: [], edges: [], saveStatus: 'idle' });
+        // Check for a local draft even if there's no saved blueprint yet
+        const draft = loadDraft(folder);
+        if (draft) {
+          set({ nodes: draft.nodes, edges: draft.edges, saveStatus: 'unsaved' });
+        } else {
+          set({ nodes: [], edges: [], saveStatus: 'idle' });
+        }
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -400,11 +607,13 @@ export const useStore = create<BlueprintStore>((set, get) => ({
       }, 0);
       nodeCounter = maxId;
 
-      set({
-        nodes: project.nodes ?? [],
-        edges: project.edges ?? [],
-        saveStatus: 'saved',
-      });
+      // Prefer a local draft if it exists (user had unsaved changes)
+      const draft = loadDraft(folder);
+      if (draft) {
+        set({ nodes: draft.nodes, edges: draft.edges, saveStatus: 'unsaved' });
+      } else {
+        set({ nodes: project.nodes ?? [], edges: project.edges ?? [], saveStatus: 'saved' });
+      }
     } catch (err) {
       console.error('[openGroup]', err);
       set({ nodes: [], edges: [], saveStatus: 'error' });
@@ -427,6 +636,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         throw new Error(err.error);
       }
+      clearDraft(currentGroupFolder);
       set({ saveStatus: 'saved' });
     } catch (err) {
       console.error('[saveCurrentGroup]', err);
@@ -435,6 +645,7 @@ export const useStore = create<BlueprintStore>((set, get) => ({
   },
 
   closeGroup: () => {
+    lsDel(LS_LAST_GROUP);
     set({
       currentGroupFolder: null,
       projectName: 'Untitled Project',
@@ -442,6 +653,10 @@ export const useStore = create<BlueprintStore>((set, get) => ({
       edges: [],
       selectedNodeId: null,
       saveStatus: 'idle',
+      past: [],
+      future: [],
+      canUndo: false,
+      canRedo: false,
     });
   },
 

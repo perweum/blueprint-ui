@@ -1,0 +1,16 @@
+{
+  "name": "Morning Briefing",
+  "version": "1",
+  "description": "Daily briefing with weather, calendar, and news delivered every morning",
+  "nodes": [
+    {"id":"node-1","type":"trigger","position":{"x":200,"y":80},"data":{"kind":"trigger","label":"Daily at 8am","triggerType":"schedule","config":"0 8 * * *","additionalTriggers":[{"triggerType":"message","config":""}]}},
+    {"id":"node-2","type":"tool","position":{"x":200,"y":300},"data":{"kind":"tool","label":"Weather","toolType":"bash","config":"LOCATION=$(curl -s \"http://ip-api.com/json\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d['lat'], d['lon'])\")\nLAT=$(echo $LOCATION | awk '{print $1}'); LON=$(echo $LOCATION | awk '{print $2}')\ncurl -s -A \"nanoclaw/1.0\" \"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=$LAT&lon=$LON\" | python3 -c \"\nimport sys, json\nd = json.load(sys.stdin)\ntimeseries = d['properties']['timeseries']\nnow = timeseries[0]['data']['instant']['details']\nprint(f\\\"Temperature: {now['air_temperature']}°C\\\")\nprint(f\\\"Wind: {now['wind_speed']} m/s\\\")\n\""}},
+    {"id":"node-3","type":"agent","position":{"x":200,"y":520},"data":{"kind":"agent","label":"Briefing Writer","model":"claude-haiku-4-5-20251001","systemPrompt":"You write a concise, friendly morning briefing. Use the weather data from the tool. Keep it short — 3-5 sentences. Start with a greeting and today's date. Mention the weather and anything notable. Sign off with a motivating one-liner."}},
+    {"id":"node-4","type":"output","position":{"x":200,"y":740},"data":{"kind":"output","label":"Send to Telegram","destination":"telegram","config":""}}
+  ],
+  "edges":[
+    {"id":"e1","source":"node-1","target":"node-2","animated":true},
+    {"id":"e2","source":"node-2","target":"node-3","animated":true},
+    {"id":"e3","source":"node-3","target":"node-4","animated":true}
+  ]
+}

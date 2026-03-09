@@ -1,0 +1,16 @@
+{
+  "name": "GitHub PR Reviewer",
+  "version": "1",
+  "description": "Reviews open pull requests every 15 minutes and posts constructive feedback",
+  "nodes": [
+    {"id":"node-1","type":"trigger","position":{"x":200,"y":80},"data":{"kind":"trigger","label":"Every 15 minutes","triggerType":"schedule","config":"*/15 * * * *"}},
+    {"id":"node-2","type":"tool","position":{"x":200,"y":300},"data":{"kind":"tool","label":"GitHub CLI","toolType":"bash","config":"gh pr list --repo OWNER/REPO --state open --json number,title,author,headRefName"}},
+    {"id":"node-3","type":"agent","position":{"x":200,"y":520},"data":{"kind":"agent","label":"PR Reviewer","model":"claude-sonnet-4-6","systemPrompt":"You review GitHub pull requests. For each open PR without a review, fetch the diff with `gh pr diff NUMBER --repo OWNER/REPO` and post a constructive review comment with `gh pr comment NUMBER --repo OWNER/REPO --body \"...\"`. Format reviews with: 🟢 What looks good, 🟡 Suggestions, 🔴 Concerns. Be helpful and constructive. If no PRs need review, produce no output. Replace OWNER/REPO with the actual repository."}},
+    {"id":"node-4","type":"output","position":{"x":200,"y":740},"data":{"kind":"output","label":"Send summary","destination":"telegram","config":""}}
+  ],
+  "edges":[
+    {"id":"e1","source":"node-1","target":"node-2","animated":true},
+    {"id":"e2","source":"node-2","target":"node-3","animated":true},
+    {"id":"e3","source":"node-3","target":"node-4","animated":true}
+  ]
+}

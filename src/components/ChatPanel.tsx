@@ -10,6 +10,34 @@ const MODEL_OPTIONS: { value: AssistantModel; label: string }[] = [
 
 // ── Message renderer ─────────────────────────────────────────────────────────
 
+// Split text into readable prose and raw JSON blobs (which get collapsed)
+function splitJsonBlobs(text: string): Array<{ kind: 'text' | 'json'; content: string }> {
+  const result: Array<{ kind: 'text' | 'json'; content: string }> = [];
+  // Detect runs of raw JSON-like content: long segments containing "op": or multiple "key": patterns
+  const jsonBlobRe = /(\{[^{}]{0,30}"op"\s*:[^}]{0,200}\}(?:\s*,\s*\{[^{}]{0,30}"op"[^}]{0,200}\})*)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = jsonBlobRe.exec(text)) !== null) {
+    if (m.index > last) result.push({ kind: 'text', content: text.slice(last, m.index) });
+    result.push({ kind: 'json', content: m[0] });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) result.push({ kind: 'text', content: text.slice(last) });
+  return result.length ? result : [{ kind: 'text', content: text }];
+}
+
+function JsonBlob({ content }: { content: string }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div className="chat-json-blob">
+      <button className="chat-json-blob__toggle" onClick={() => setOpen(o => !o)}>
+        {open ? '▾' : '▸'} Technical details
+      </button>
+      {open && <pre className="chat-json-blob__pre">{content}</pre>}
+    </div>
+  );
+}
+
 function renderMessage(text: string): React.ReactNode {
   const segments: React.ReactNode[] = [];
   let key = 0;
@@ -21,8 +49,15 @@ function renderMessage(text: string): React.ReactNode {
 
   while ((m = codeBlockRe.exec(text)) !== null) {
     if (m.index > lastIndex) {
-      segments.push(<span key={key++}>{renderLines(text.slice(lastIndex, m.index), key)}</span>);
-      key += 100;
+      const prose = text.slice(lastIndex, m.index);
+      for (const part of splitJsonBlobs(prose)) {
+        if (part.kind === 'json') {
+          segments.push(<JsonBlob key={key++} content={part.content} />);
+        } else {
+          segments.push(<span key={key++}>{renderLines(part.content, key)}</span>);
+          key += 100;
+        }
+      }
     }
     const lang = m[1] || 'bash';
     const code = m[2].trim();
@@ -44,7 +79,15 @@ function renderMessage(text: string): React.ReactNode {
   }
 
   if (lastIndex < text.length) {
-    segments.push(<span key={key++}>{renderLines(text.slice(lastIndex), key)}</span>);
+    const prose = text.slice(lastIndex);
+    for (const part of splitJsonBlobs(prose)) {
+      if (part.kind === 'json') {
+        segments.push(<JsonBlob key={key++} content={part.content} />);
+      } else {
+        segments.push(<span key={key++}>{renderLines(part.content, key)}</span>);
+        key += 100;
+      }
+    }
   }
 
   return <>{segments}</>;
@@ -181,6 +224,20 @@ const ChatMessage = React.memo(function ChatMessage({
           </div>
         </div>
       )}
+      {msg.options && msg.options.length > 0 && (
+        <div className="chat-msg__options">
+          {msg.options.map((opt) => (
+            <button
+              key={opt}
+              className="chat-msg__option-btn"
+              onClick={() => useStore.getState().sendChatMessage(opt)}
+              disabled={isChatLoading}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 });
@@ -195,6 +252,7 @@ interface ChatPanelProps {
 export function ChatPanel({ prefill, onPrefillUsed }: ChatPanelProps) {
   const chatMessages = useStore(s => s.chatMessages);
   const isChatLoading = useStore(s => s.isChatLoading);
+  const chatLoadingCmd = useStore(s => s.chatLoadingCmd);
   const assistantModel = useStore(s => s.assistantModel);
   const { sendChatMessage, setAssistantModel } = useStore();
   const [input, setInput] = useState('');
@@ -263,7 +321,11 @@ export function ChatPanel({ prefill, onPrefillUsed }: ChatPanelProps) {
         {isChatLoading && (
           <div className="chat-msg chat-msg--assistant">
             <div className="chat-msg__bubble chat-msg__bubble--loading">
-              <span className="dot" /><span className="dot" /><span className="dot" />
+              {chatLoadingCmd ? (
+                <span className="chat-msg__running-cmd">⚙ {chatLoadingCmd}…</span>
+              ) : (
+                <><span className="dot" /><span className="dot" /><span className="dot" /></>
+              )}
             </div>
           </div>
         )}

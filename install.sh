@@ -5,9 +5,10 @@
 set -euo pipefail
 
 CLAW_REPO="https://github.com/perweum/claw-studio.git"
-NANOCLAW_REPO="https://github.com/nanoclaw-ai/nanoclaw.git"
+NANOCLAW_REPO="https://github.com/qwibitai/nanoclaw.git"
 NANOCLAW_DIR="$HOME/nanoclaw"
-STUDIO_DIR=""   # resolved below
+STUDIO_DIR="$HOME/claw-studio"
+OS="$(uname)"   # Darwin or Linux
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 bold=$(tput bold 2>/dev/null || true)
@@ -28,45 +29,88 @@ echo "${bold}◈ Claw Studio${reset} — installer"
 echo "────────────────────────────────"
 echo ""
 
-# ── macOS check ───────────────────────────────────────────────────────────────
-if [[ "$(uname)" != "Darwin" ]]; then
-  die "This installer currently supports macOS only."
+if [[ "$OS" != "Darwin" && "$OS" != "Linux" ]]; then
+  die "Unsupported OS: $OS. This installer supports macOS and Linux."
 fi
 
-# ── Homebrew ──────────────────────────────────────────────────────────────────
-step "Checking Homebrew"
-if ! command -v brew &>/dev/null; then
-  warn "Homebrew not found — installing it now."
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  # Add brew to PATH for this session (Apple Silicon path)
-  [[ -f /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)"
-else
-  ok "Homebrew $(brew --version | head -1)"
-fi
+# ── macOS: Homebrew + Node.js + Git ──────────────────────────────────────────
+if [[ "$OS" == "Darwin" ]]; then
 
-# ── Node.js ───────────────────────────────────────────────────────────────────
-step "Checking Node.js"
-if ! command -v node &>/dev/null; then
-  warn "Node.js not found — installing via Homebrew."
-  brew install node
-else
-  NODE_VER=$(node --version | sed 's/v//')
-  NODE_MAJOR=$(echo "$NODE_VER" | cut -d. -f1)
-  if [[ "$NODE_MAJOR" -lt 18 ]]; then
-    warn "Node.js $NODE_VER is too old (need 18+) — upgrading."
-    brew upgrade node || brew install node
+  step "Checking Homebrew"
+  if ! command -v brew &>/dev/null; then
+    warn "Homebrew not found — installing it now."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # Add brew to PATH for this session (Apple Silicon path)
+    [[ -f /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)"
   else
-    ok "Node.js v$NODE_VER"
+    ok "Homebrew $(brew --version | head -1)"
   fi
-fi
 
-# ── Git ───────────────────────────────────────────────────────────────────────
-step "Checking git"
-if ! command -v git &>/dev/null; then
-  warn "git not found — installing via Homebrew."
-  brew install git
+  step "Checking Node.js"
+  if ! command -v node &>/dev/null; then
+    warn "Node.js not found — installing via Homebrew."
+    brew install node
+  else
+    NODE_VER=$(node --version | sed 's/v//')
+    NODE_MAJOR=$(echo "$NODE_VER" | cut -d. -f1)
+    if [[ "$NODE_MAJOR" -lt 18 ]]; then
+      warn "Node.js $NODE_VER is too old (need 18+) — upgrading."
+      brew upgrade node || brew install node
+    else
+      ok "Node.js v$NODE_VER"
+    fi
+  fi
+
+  step "Checking git"
+  if ! command -v git &>/dev/null; then
+    warn "git not found — installing via Homebrew."
+    brew install git
+  else
+    ok "git $(git --version | awk '{print $3}')"
+  fi
+
+# ── Linux: apt + Node.js + Git ───────────────────────────────────────────────
 else
-  ok "git $(git --version | awk '{print $3}')"
+
+  step "Checking Node.js"
+  if ! command -v node &>/dev/null; then
+    warn "Node.js not found — installing via NodeSource (Node 20 LTS)."
+    if command -v apt-get &>/dev/null; then
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      apt-get install -y nodejs
+    elif command -v dnf &>/dev/null; then
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+      dnf install -y nodejs
+    elif command -v yum &>/dev/null; then
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+      yum install -y nodejs
+    else
+      die "Cannot install Node.js automatically. Install Node.js 18+ manually and re-run."
+    fi
+  else
+    NODE_VER=$(node --version | sed 's/v//')
+    NODE_MAJOR=$(echo "$NODE_VER" | cut -d. -f1)
+    if [[ "$NODE_MAJOR" -lt 18 ]]; then
+      die "Node.js $NODE_VER is too old (need 18+). Install Node.js 18+ and re-run."
+    else
+      ok "Node.js v$NODE_VER"
+    fi
+  fi
+
+  step "Checking git"
+  if ! command -v git &>/dev/null; then
+    warn "git not found — installing."
+    if command -v apt-get &>/dev/null; then
+      apt-get install -y git
+    elif command -v dnf &>/dev/null; then
+      dnf install -y git
+    else
+      die "Cannot install git automatically. Install git manually and re-run."
+    fi
+  else
+    ok "git $(git --version | awk '{print $3}')"
+  fi
+
 fi
 
 # ── Container runtime ─────────────────────────────────────────────────────────
@@ -76,11 +120,43 @@ HAS_APPLE=false
 HAS_DOCKER=false
 CHOSEN_RUNTIME=""
 
-command -v container &>/dev/null && HAS_APPLE=true
+if [[ "$OS" == "Darwin" ]]; then
+  command -v container &>/dev/null && HAS_APPLE=true
+fi
 command -v docker &>/dev/null && docker info &>/dev/null 2>&1 && HAS_DOCKER=true
 
-if $HAS_APPLE && $HAS_DOCKER; then
-  # Both available — ask which to use
+if [[ "$OS" == "Linux" ]]; then
+  # Linux: Docker only
+  if $HAS_DOCKER; then
+    CHOSEN_RUNTIME="docker"
+    ok "Docker found and running — using it"
+  else
+    warn "Docker not found — installing Docker Engine."
+    if command -v apt-get &>/dev/null; then
+      apt-get install -y ca-certificates curl gnupg
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      chmod a+r /etc/apt/keyrings/docker.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+      # Add current user to docker group so they don't need sudo
+      usermod -aG docker "${SUDO_USER:-$USER}" 2>/dev/null || true
+      ok "Docker Engine installed"
+      warn "You may need to log out and back in for the docker group to take effect."
+    else
+      die "Cannot install Docker automatically. Install Docker Engine manually (docs.docker.com/engine/install/) and re-run."
+    fi
+    docker info &>/dev/null 2>&1 || die "Docker isn't running. Start it with: sudo systemctl start docker"
+    ok "Docker running"
+    CHOSEN_RUNTIME="docker"
+  fi
+
+elif $HAS_APPLE && $HAS_DOCKER; then
+  # macOS: both available — ask which to use
   echo ""
   echo "  Both Apple Container and Docker are installed."
   echo "  Which one should nanoclaw use?"
@@ -106,7 +182,7 @@ elif $HAS_DOCKER; then
   ok "Docker found and running — using it"
 
 else
-  # Nothing installed — ask which to install
+  # macOS: nothing installed — ask which to install
   echo ""
   echo "  nanoclaw runs agents inside containers. Nothing is installed yet."
   echo "  Which container runtime would you like to use?"
@@ -232,9 +308,7 @@ fi
 # ── Claw Studio ───────────────────────────────────────────────────────────────
 step "Checking Claw Studio"
 
-PROJECTS_DIR="$NANOCLAW_DIR/Projects"
-mkdir -p "$PROJECTS_DIR"
-STUDIO_DIR="$PROJECTS_DIR/Claw Studio"
+STUDIO_DIR="$HOME/claw-studio"
 
 if [[ -d "$STUDIO_DIR/.git" ]]; then
   ok "Claw Studio already installed at $STUDIO_DIR"
@@ -250,23 +324,64 @@ step "Installing Claw Studio dependencies"
 (cd "$STUDIO_DIR" && npm install --silent)
 ok "Dependencies installed"
 
-# ── launchd service for nanoclaw ──────────────────────────────────────────────
+# ── Background service for nanoclaw ──────────────────────────────────────────
 step "Setting up nanoclaw background service"
 
-PLIST_DST="$HOME/Library/LaunchAgents/com.nanoclaw.plist"
-PLIST_SRC="$NANOCLAW_DIR/com.nanoclaw.plist"
+if [[ "$OS" == "Darwin" ]]; then
+  PLIST_DST="$HOME/Library/LaunchAgents/com.nanoclaw.plist"
+  PLIST_SRC="$NANOCLAW_DIR/com.nanoclaw.plist"
+  if [[ ! -f "$PLIST_SRC" ]]; then
+    warn "com.nanoclaw.plist not found in nanoclaw directory — skipping service setup"
+  else
+    cp "$PLIST_SRC" "$PLIST_DST"
+    launchctl unload "$PLIST_DST" 2>/dev/null || true
+    launchctl load "$PLIST_DST"
+    ok "nanoclaw service installed and started (launchd)"
+  fi
 
-if [[ ! -f "$PLIST_SRC" ]]; then
-  warn "com.nanoclaw.plist not found in nanoclaw directory — skipping service setup"
 else
-  cp "$PLIST_SRC" "$PLIST_DST"
-  # Load (or restart if already loaded)
-  launchctl unload "$PLIST_DST" 2>/dev/null || true
-  launchctl load "$PLIST_DST"
-  ok "nanoclaw service installed and started"
+  # Linux: create a systemd user service
+  SYSTEMD_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$SYSTEMD_DIR"
+  cat > "$SYSTEMD_DIR/nanoclaw.service" << EOF
+[Unit]
+Description=NanoClaw personal assistant
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$NANOCLAW_DIR
+ExecStart=$(command -v node) dist/index.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target
+EOF
+  # Build nanoclaw before starting
+  (cd "$NANOCLAW_DIR" && npm run build 2>/dev/null || warn "Build step failed — check npm run build manually")
+  systemctl --user daemon-reload
+  systemctl --user enable nanoclaw
+  systemctl --user start nanoclaw 2>/dev/null || warn "Could not start nanoclaw service. Run: systemctl --user start nanoclaw"
+  ok "nanoclaw service installed (systemd user service)"
 fi
 
 # ── Create macOS app (no quarantine — assembled locally from repo) ────────────
+if [[ "$OS" != "Darwin" ]]; then
+  # Linux: print a launcher hint and skip the .app step
+  echo ""
+  echo "  ${bold}To open Claw Studio:${reset}"
+  echo "    cd \"$STUDIO_DIR\" && npm run dev"
+  echo "    Then open http://localhost:5275 in your browser."
+  echo ""
+  echo "  You can also add this as a desktop shortcut — create a .desktop file"
+  echo "  at ~/.local/share/applications/claw-studio.desktop pointing to:"
+  echo "    Exec=bash -c 'cd \"$STUDIO_DIR\" && npm run dev & sleep 4 && xdg-open http://localhost:5275'"
+  echo ""
+fi
+
+if [[ "$OS" == "Darwin" ]]; then
 step "Creating Claw Studio app"
 
 APP_TEMPLATE="$STUDIO_DIR/macos-app/Claw Studio.app"
@@ -345,16 +460,27 @@ chmod +x "$APP_DST/Contents/MacOS/launch"
 ok "App installed: $APP_DST"
 ok "Find it in Launchpad or Spotlight — search for 'Claw Studio'"
 
+fi  # end if [[ "$OS" == "Darwin" ]]
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "────────────────────────────────"
 echo "${bold}${green}All done!${reset}"
 echo ""
-echo "  Open ${bold}Claw Studio${reset} from Launchpad, Spotlight, or /Applications."
+
+if [[ "$OS" == "Darwin" ]]; then
+  echo "  Open ${bold}Claw Studio${reset} from Launchpad, Spotlight, or /Applications."
+else
+  echo "  Start ${bold}Claw Studio${reset}: cd \"$STUDIO_DIR\" && npm run dev"
+  echo "  Then open http://localhost:5275 in your browser."
+  echo ""
+  echo "  nanoclaw status:  systemctl --user status nanoclaw"
+  echo "  nanoclaw logs:    journalctl --user -u nanoclaw -f"
+fi
 echo ""
 
-# Auto-start if running interactively in a terminal (not piped)
-if [[ -t 1 ]]; then
+# Auto-start (macOS only — Linux users start via terminal)
+if [[ "$OS" == "Darwin" && -t 1 ]]; then
   read -r -p "  Start Claw Studio now? [Y/n] " yn
   yn="${yn:-y}"
   if [[ "$yn" =~ ^[Yy]$ ]]; then

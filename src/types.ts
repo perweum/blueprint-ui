@@ -28,8 +28,13 @@ export interface RouterNodeData extends Record<string, unknown> {
 export interface OutputNodeData extends Record<string, unknown> {
   kind: 'output'; label: string; destination: OutputDestination; config: string;
 }
+export interface TriggerEntry {
+  triggerType: TriggerType;
+  config: string;
+}
 export interface TriggerNodeData extends Record<string, unknown> {
   kind: 'trigger'; label: string; triggerType: TriggerType; config: string;
+  additionalTriggers?: TriggerEntry[];
 }
 export interface ConditionNodeData extends Record<string, unknown> {
   kind: 'condition'; label: string; conditionType: ConditionType; value: string;

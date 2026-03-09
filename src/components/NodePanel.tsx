@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import type {
   AgentModel, BlueprintNodeData, ConditionType, FilePermission,
-  MemoryOperation, MemoryScope, OutputDestination, ToolType, TransformType, TriggerType,
+  MemoryOperation, MemoryScope, OutputDestination, ToolType, TransformType, TriggerEntry, TriggerNodeData, TriggerType,
 } from '../types';
 import { AGENT_PRESETS, TOOL_PRESETS } from '../types';
 
@@ -253,16 +253,21 @@ export function NodePanel() {
   const selectNode = useStore(s => s.selectNode);
   const updateNodeData = useStore(s => s.updateNodeData);
   const deleteNode = useStore(s => s.deleteNode);
-  const [customCronMode, setCustomCronMode] = useState(false);
+  // customCronSet tracks which trigger indices are in "custom cron" mode.
+  // Index 0 = primary trigger, 1+ = additionalTriggers[i-1].
+  const [customCronSet, setCustomCronSet] = useState<Set<number>>(new Set());
 
-  // When selected node changes, derive whether it already has a custom cron
   useEffect(() => {
     const d = node?.data as BlueprintNodeData | undefined;
-    setCustomCronMode(
-      d?.kind === 'trigger' &&
-      !!(d as { config?: string }).config &&
-      !SCHEDULE_PRESETS.some(p => p.cron === (d as { config?: string }).config)
-    );
+    if (d?.kind !== 'trigger') { setCustomCronSet(new Set()); return; }
+    const td = d as TriggerNodeData;
+    const next = new Set<number>();
+    const isCustom = (config: string) => !!config && !SCHEDULE_PRESETS.some(p => p.cron === config);
+    if (td.triggerType === 'schedule' && isCustom(td.config)) next.add(0);
+    (td.additionalTriggers ?? []).forEach((t, i) => {
+      if (t.triggerType === 'schedule' && isCustom(t.config)) next.add(i + 1);
+    });
+    setCustomCronSet(next);
   }, [selectedNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
   const isOpen = !!node;
   const data = node?.data as BlueprintNodeData | undefined;
@@ -292,33 +297,28 @@ export function NodePanel() {
       )}
 
       {/* ── Trigger ── */}
-      {data.kind === 'trigger' && (
-        <>
-          <div className="node-panel__field">
-            <label>When does this run?</label>
-            <select
-              value={data.triggerType}
-              onChange={(e) => update({ triggerType: e.target.value as TriggerType } as Partial<BlueprintNodeData>)}
-            >
-              {TRIGGER_TYPES.map((t) => (
-                <option key={t} value={t}>{TRIGGER_LABELS[t]}</option>
-              ))}
-            </select>
-          </div>
-          {data.triggerType === 'schedule' && (
+      {data.kind === 'trigger' && (() => {
+        const td = data as TriggerNodeData;
+        const additional = td.additionalTriggers ?? [];
+
+        function setCustom(idx: number, val: boolean) {
+          setCustomCronSet(prev => {
+            const next = new Set(prev);
+            if (val) next.add(idx); else next.delete(idx);
+            return next;
+          });
+        }
+
+        function renderScheduleConfig(config: string, onConfig: (v: string) => void, idx: number) {
+          const isCustom = customCronSet.has(idx);
+          return (
             <>
               <div className="node-panel__field">
-                <label>When should this run?</label>
                 <select
-                  value={customCronMode ? '__custom__' : (SCHEDULE_PRESETS.find(p => p.cron === data.config)?.cron ?? '')}
+                  value={isCustom ? '__custom__' : (SCHEDULE_PRESETS.find(p => p.cron === config)?.cron ?? '')}
                   onChange={(e) => {
-                    if (e.target.value === '__custom__') {
-                      setCustomCronMode(true);
-                      // Don't touch config — user will edit it in the custom input below
-                    } else {
-                      setCustomCronMode(false);
-                      update({ config: e.target.value } as Partial<BlueprintNodeData>);
-                    }
+                    if (e.target.value === '__custom__') { setCustom(idx, true); }
+                    else { setCustom(idx, false); onConfig(e.target.value); }
                   }}
                 >
                   <option value="">— pick a schedule —</option>
@@ -329,44 +329,109 @@ export function NodePanel() {
                 </select>
                 <HelpText>Choose how often the bot should run automatically.</HelpText>
               </div>
-              {customCronMode && (
+              {isCustom && (
                 <div className="node-panel__field">
                   <label>Custom schedule (cron expression)</label>
                   <input
-                    value={data.config}
+                    value={config}
                     placeholder="0 8 * * 1-5"
                     autoFocus
-                    onChange={(e) => update({ config: e.target.value } as Partial<BlueprintNodeData>)}
+                    onChange={(e) => onConfig(e.target.value)}
                   />
                   <HelpText>Format: minute hour day month weekday. Example: "0 8 * * 1-5" = weekdays at 8am.</HelpText>
                 </div>
               )}
             </>
-          )}
-          {data.triggerType === 'webhook' && (
+          );
+        }
+
+        function renderTriggerConfig(type: TriggerType, config: string, onConfig: (v: string) => void, idx: number) {
+          if (type === 'schedule') return renderScheduleConfig(config, onConfig, idx);
+          if (type === 'message') return (
             <div className="node-panel__field">
-              <label>Webhook path</label>
               <input
-                value={data.config}
-                placeholder="/webhook/my-trigger"
-                onChange={(e) => update({ config: e.target.value } as Partial<BlueprintNodeData>)}
+                value={config}
+                placeholder="Keyword filter — e.g. check prices (leave blank for all messages)"
+                onChange={(e) => onConfig(e.target.value)}
               />
-              <HelpText>The URL path that will start this pipeline when called.</HelpText>
+              <HelpText>Only respond to messages containing this word or phrase. Leave blank to respond to all messages.</HelpText>
             </div>
-          )}
-          {data.triggerType === 'message' && (
+          );
+          if (type === 'webhook') return (
             <div className="node-panel__field">
-              <label>Trigger pattern (optional)</label>
-              <input
-                value={data.config}
-                placeholder="e.g. morning briefing"
-                onChange={(e) => update({ config: e.target.value } as Partial<BlueprintNodeData>)}
-              />
-              <HelpText>Only trigger on messages containing this text. Leave blank to run on all messages.</HelpText>
+              <div className="node-panel__warning-banner">
+                ⚠ Webhook triggers are not yet supported by nanoclaw. This option is planned for a future release. Use a schedule or message trigger instead.
+              </div>
             </div>
-          )}
-        </>
-      )}
+          );
+          return null;
+        }
+
+        function updateAdditional(i: number, patch: Partial<TriggerEntry>) {
+          const updated = additional.map((t, j) => j === i ? { ...t, ...patch } : t);
+          update({ additionalTriggers: updated } as Partial<BlueprintNodeData>);
+        }
+
+        function removeAdditional(i: number) {
+          update({ additionalTriggers: additional.filter((_, j) => j !== i) } as Partial<BlueprintNodeData>);
+          setCustomCronSet(prev => {
+            const next = new Set<number>();
+            prev.forEach(n => {
+              if (n < i + 1) next.add(n);
+              else if (n > i + 1) next.add(n - 1);
+            });
+            return next;
+          });
+        }
+
+        return (
+          <>
+            {/* Primary trigger */}
+            <div className="node-panel__field">
+              <label>When does this run?</label>
+              <select
+                value={td.triggerType}
+                onChange={(e) => update({ triggerType: e.target.value as TriggerType, config: '' } as Partial<BlueprintNodeData>)}
+              >
+                {TRIGGER_TYPES.map((t) => (
+                  <option key={t} value={t}>{TRIGGER_LABELS[t]}</option>
+                ))}
+              </select>
+            </div>
+            {renderTriggerConfig(td.triggerType, td.config, (v) => update({ config: v } as Partial<BlueprintNodeData>), 0)}
+
+            {/* Additional triggers */}
+            {additional.map((t, i) => (
+              <div key={i} className="trigger-additional">
+                <div className="trigger-additional__header">
+                  <span>Also trigger when</span>
+                  <button className="trigger-additional__remove" onClick={() => removeAdditional(i)} title="Remove this trigger">✕</button>
+                </div>
+                <div className="node-panel__field">
+                  <select
+                    value={t.triggerType}
+                    onChange={(e) => updateAdditional(i, { triggerType: e.target.value as TriggerType, config: '' })}
+                  >
+                    {TRIGGER_TYPES.map((type) => (
+                      <option key={type} value={type}>{TRIGGER_LABELS[type]}</option>
+                    ))}
+                  </select>
+                </div>
+                {renderTriggerConfig(t.triggerType, t.config, (v) => updateAdditional(i, { ...t, config: v }), i + 1)}
+              </div>
+            ))}
+
+            <div className="node-panel__field">
+              <button
+                className="btn-add-trigger"
+                onClick={() => update({ additionalTriggers: [...additional, { triggerType: 'schedule', config: '' }] } as Partial<BlueprintNodeData>)}
+              >
+                + Add another trigger
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       {/* ── Agent ── */}
       {data.kind === 'agent' && (
@@ -581,6 +646,16 @@ export function NodePanel() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── Conceptual note for "logic" nodes ── */}
+      {(data.kind === 'condition' || data.kind === 'router' || data.kind === 'transform' || data.kind === 'memory' || data.kind === 'file') && (
+        <div className="node-panel__field node-panel__field--how-it-works">
+          <span className="field-info-icon">💡</span>
+          <span>
+            This node adds instructions to your agent's system prompt. The agent reads them and decides how to act — it's not automatic middleware that intercepts output.
+          </span>
+        </div>
       )}
 
       {/* ── Condition ── */}

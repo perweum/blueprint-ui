@@ -182,7 +182,17 @@ export function SetupWizard({ onDone }: SetupWizardProps) {
                 → API Keys → Create Key.
               </p>
               <p className="setup-wizard__step-desc" style={{ marginTop: 6 }}>
-                You'll need a free account. Usage is pay-as-you-go — typical bot usage costs a few cents a day.
+                Usage is pay-as-you-go — typical bot usage costs a few cents a day.{' '}
+                <strong style={{ color: '#fbbf24' }}>A credit card is required</strong> to activate your account — add one at{' '}
+                <a
+                  href="https://console.anthropic.com/settings/billing"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="setup-wizard__link"
+                >
+                  console.anthropic.com/settings/billing
+                </a>{' '}
+                before generating a key.
               </p>
               <input
                 className="setup-wizard__input"

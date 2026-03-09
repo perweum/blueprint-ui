@@ -37,9 +37,10 @@ interface ToolbarProps {
   onOpenPalette: () => void;
   onOpenGroupPicker: () => void;
   onNewBot: () => void;
+  onOpenStatus: () => void;
 }
 
-export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarProps) {
+export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot, onOpenStatus }: ToolbarProps) {
   const hasAgentNode = useStore(s => s.nodes.some(n => n.type === 'agent'));
   const currentGroupFolder = useStore(s => s.currentGroupFolder);
   const saveStatus = useStore(s => s.saveStatus);
@@ -49,6 +50,10 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarP
   const exportProject = useStore(s => s.exportProject);
   const deployToGroup = useStore(s => s.deployToGroup);
   const fetchChannels = useStore(s => s.fetchChannels);
+  const undo = useStore(s => s.undo);
+  const redo = useStore(s => s.redo);
+  const canUndo = useStore(s => s.canUndo);
+  const canRedo = useStore(s => s.canRedo);
 
   const [deployState, setDeployState] = useState<DeployState>('idle');
   const [deployPreview, setDeployPreview] = useState<string | null>(null);
@@ -56,6 +61,10 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarP
   const [deployActions, setDeployActions] = useState<{ done: string[]; manual: string[] } | null>(null);
   const [scheduleChannelJids, setScheduleChannelJids] = useState<Record<string, string>>({});
   const [registeringSchedule, setRegisteringSchedule] = useState<string | null>(null);
+  const [msgChannelJid, setMsgChannelJid] = useState('');
+  const [registeringMsg, setRegisteringMsg] = useState(false);
+  const [runNowState, setRunNowState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [runNowMsg, setRunNowMsg] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -94,6 +103,23 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarP
     }
   }
 
+  async function handleRegisterMsgAndRedeploy() {
+    if (!currentGroupFolder || !msgChannelJid) return;
+    setRegisteringMsg(true);
+    try {
+      await fetch(`/api/groups/${currentGroupFolder}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelJid: msgChannelJid, type: 'message' }),
+      });
+      setDeployState('idle');
+      setMsgChannelJid('');
+      await handleDeploy();
+    } catch { /* ignore */ } finally {
+      setRegisteringMsg(false);
+    }
+  }
+
   // Close menu when clicking outside
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
@@ -110,6 +136,27 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarP
     const a = document.createElement('a');
     a.href = '/api/backup';
     a.click();
+  }
+
+  async function handleRunNow() {
+    if (!currentGroupFolder) return;
+    setRunNowState('running');
+    setRunNowMsg(null);
+    try {
+      const res = await fetch(`/api/groups/${currentGroupFolder}/run`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setRunNowState('done');
+        setRunNowMsg(`Triggered ${data.triggered} task${data.triggered !== 1 ? 's' : ''}. Results will arrive via your connected channel.`);
+      } else {
+        setRunNowState('error');
+        setRunNowMsg(data.error ?? 'Unknown error');
+      }
+    } catch (err) {
+      setRunNowState('error');
+      setRunNowMsg(err instanceof Error ? err.message : String(err));
+    }
+    setTimeout(() => { setRunNowState('idle'); setRunNowMsg(null); }, 6000);
   }
 
   async function handleDeploy() {
@@ -167,6 +214,22 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarP
           <button className="toolbar__btn btn-secondary toolbar__btn--palette" onClick={onOpenPalette} title="Command palette (⌘K)">
             ⌘K
           </button>
+          <button
+            className="toolbar__btn btn-secondary toolbar__btn--history"
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (⌘Z)"
+          >
+            ↩
+          </button>
+          <button
+            className="toolbar__btn btn-secondary toolbar__btn--history"
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (⌘⇧Z)"
+          >
+            ↪
+          </button>
         </div>
 
         <div className="toolbar__right">
@@ -188,12 +251,34 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarP
               >
                 {deployState === 'deploying' ? 'Deploying…' : '⬆ Deploy'}
               </button>
+              <button
+                className={`toolbar__btn btn-secondary toolbar__btn--run ${runNowState === 'running' ? 'toolbar__btn--saving' : runNowState === 'done' ? 'toolbar__btn--run-done' : runNowState === 'error' ? 'toolbar__btn--run-err' : ''}`}
+                onClick={handleRunNow}
+                disabled={runNowState === 'running'}
+                title="Trigger this bot's scheduled task right now, without waiting for the next scheduled time"
+              >
+                {runNowState === 'running' ? 'Running…' : runNowState === 'done' ? '✓ Triggered' : runNowState === 'error' ? '✕ Failed' : '▶ Run now'}
+              </button>
+              {runNowMsg && (
+                <span className="toolbar__run-msg" style={{ color: runNowState === 'error' ? 'var(--danger)' : 'var(--accent-output)' }}>
+                  {runNowMsg}
+                </span>
+              )}
             </>
           ) : (
             <button className="toolbar__btn btn-secondary" onClick={exportProject} title="Export blueprint as JSON">
               Export
             </button>
           )}
+
+          {/* Status panel button — always visible */}
+          <button
+            className="toolbar__btn btn-secondary"
+            onClick={onOpenStatus}
+            title="System status"
+          >
+            ◉ Status
+          </button>
 
           {/* Overflow menu */}
           <div className="toolbar__menu-wrap" ref={menuRef}>
@@ -282,6 +367,40 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot }: ToolbarP
                                         onClick={() => handleRegisterAndRedeploy(cronExpr)}
                                       >
                                         {isRegistering ? 'Registering…' : 'Register & Redeploy'}
+                                      </button>
+                                    </div>
+                                  </li>
+                                );
+                              }
+                              if (item === '__UNREGISTERED_MESSAGE_TRIGGER__') {
+                                return (
+                                  <li key={i} className="deploy-modal__action-schedule">
+                                    <div className="deploy-modal__schedule-header">
+                                      <span className="deploy-modal__action-icon">!</span>
+                                      <span>Message trigger — choose which channel should send messages to this bot</span>
+                                    </div>
+                                    <div className="deploy-modal__schedule-fix">
+                                      <select
+                                        className="deploy-modal__channel-select"
+                                        value={msgChannelJid}
+                                        onChange={e => setMsgChannelJid(e.target.value)}
+                                      >
+                                        <option value="">— select channel —</option>
+                                        {channels.map(ch => {
+                                          const label = detectChannelLabel(ch.folder);
+                                          return (
+                                            <option key={ch.jid} value={ch.jid}>
+                                              {label ? `${label} · ` : ''}{ch.name}
+                                            </option>
+                                          );
+                                        })}
+                                      </select>
+                                      <button
+                                        className="deploy-modal__register-btn"
+                                        disabled={!msgChannelJid || registeringMsg}
+                                        onClick={handleRegisterMsgAndRedeploy}
+                                      >
+                                        {registeringMsg ? 'Connecting…' : 'Connect & Redeploy'}
                                       </button>
                                     </div>
                                   </li>

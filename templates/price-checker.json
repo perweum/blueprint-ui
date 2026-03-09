@@ -1,0 +1,18 @@
+{
+  "name": "Price / Rate Checker",
+  "version": "1",
+  "description": "Monitors a price or rate and alerts you when it changes significantly",
+  "nodes": [
+    {"id":"node-1","type":"trigger","position":{"x":200,"y":80},"data":{"kind":"trigger","label":"Every morning + on demand","triggerType":"schedule","config":"0 9 * * *","additionalTriggers":[{"triggerType":"message","config":"check price"}]}},
+    {"id":"node-2","type":"tool","position":{"x":200,"y":300},"data":{"kind":"tool","label":"Fetch price","toolType":"bash","config":"# Replace this with your actual price source\n# Example: exchange rate\ncurl -s \"https://open.er-api.com/v6/latest/USD\" | python3 -c \"\nimport sys, json\nd = json.load(sys.stdin)\nprint(f\\\"USD/EUR: {d['rates']['EUR']:.4f}\\\")\nprint(f\\\"USD/NOK: {d['rates']['NOK']:.4f}\\\")\nprint(f\\\"Updated: {d['time_last_update_utc']}\\\")\n\""}},
+    {"id":"node-3","type":"memory","position":{"x":200,"y":520},"data":{"kind":"memory","label":"Price history","operation":"both","scope":"group","key":"price_history"}},
+    {"id":"node-4","type":"agent","position":{"x":200,"y":740},"data":{"kind":"agent","label":"Price Analyst","model":"claude-haiku-4-5-20251001","systemPrompt":"You track prices and alert on significant changes. Compare today's price from the tool with the stored history. If the change is more than 1%, mention it prominently. Always show the current rate and the change since last check. Keep the message short — 2-3 lines max."}},
+    {"id":"node-5","type":"output","position":{"x":200,"y":960},"data":{"kind":"output","label":"Send alert","destination":"telegram","config":""}}
+  ],
+  "edges":[
+    {"id":"e1","source":"node-1","target":"node-2","animated":true},
+    {"id":"e2","source":"node-2","target":"node-3","animated":true},
+    {"id":"e3","source":"node-3","target":"node-4","animated":true},
+    {"id":"e4","source":"node-4","target":"node-5","animated":true}
+  ]
+}

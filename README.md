@@ -1,7 +1,7 @@
 <div align="center">
   <img src="logo.svg" width="120" alt="Claw Studio" />
   <h1>Claw Studio</h1>
-  <p>Visual AI agent builder for <a href="https://github.com/nanoclaw-ai/nanoclaw">nanoclaw</a> — no code required.</p>
+  <p>Visual AI agent builder for <a href="https://github.com/qwibitai/nanoclaw">nanoclaw</a> — no code required.</p>
 </div>
 
 ---
@@ -29,7 +29,14 @@ Claw Studio lets you design, configure, and deploy personal AI bots using a drag
 
 - **Visual pipeline editor** — drag-and-drop canvas powered by [React Flow](https://reactflow.dev), with minimap and keyboard shortcuts
 - **AI chat assistant** — describe what you want in plain English; the assistant builds or edits nodes for you using Claude
+- **Guided option prompts** — the assistant presents clickable choices when it needs your input, so you never have to guess what to type
 - **10 node types** — Trigger, Agent, Tool (Bash + MCP), Memory, Transform, Condition, Router, Output, File, Comment
+- **Multi-trigger nodes** — one trigger node can combine a schedule *and* a message trigger (e.g. "run every morning, but also on demand")
+- **Channel-aware AI** — the assistant reads your connected channels and automatically suggests the right output destination
+- **Run now button** — trigger any scheduled bot immediately, without waiting for its next cron tick
+- **Undo/redo** — 50-step canvas history via Cmd+Z / Cmd+Shift+Z or the toolbar buttons
+- **Crash-safe drafts** — unsaved canvas changes are auto-saved to localStorage every second and restored if you close or refresh without saving; chat history survives a refresh within the same tab session
+- **Starter templates** — open a ready-made blueprint (morning briefing, PR reviewer, price checker) from the New bot flow to get started in seconds
 - **Free weather built-in** — yr.no weather and air quality presets, no API key needed
 - **MCP service picker** — built-in presets for Gmail, Google Calendar, iCal, News, and more
 - **Schedule presets** — pick from common schedules ("Every day at 8am") without writing cron expressions
@@ -38,13 +45,15 @@ Claw Studio lets you design, configure, and deploy personal AI bots using a drag
 - **Deploy actions** — Deploy shows exactly what was applied automatically vs. what needs manual steps
 - **One-click backup** — back up all your bots via the `⋯` menu in the toolbar
 - **Setup wizard** — first-run wizard detects your nanoclaw installation and walks through API key setup
+- **GitHub integration** — agents can list PRs, post reviews, check CI, and create issues via the `gh` CLI (install with `/add-github`)
 
 ---
 
 ## Requirements
 
-- macOS (Apple Silicon or Intel)
-- An [Anthropic API key](https://console.anthropic.com/settings/keys) — get one free at console.anthropic.com
+- macOS (Apple Silicon or Intel) **or** Linux (Ubuntu 22.04+, Debian, Fedora, and compatible)
+- An [Anthropic API key](https://console.anthropic.com/settings/keys) — get one at console.anthropic.com
+  > **Note:** A credit card is required to activate your Anthropic account. Add one at [console.anthropic.com/settings/billing](https://console.anthropic.com/settings/billing) before generating a key. Usage is pay-as-you-go.
 
 Everything else (Node.js, nanoclaw, Docker or Apple Container) is installed automatically.
 
@@ -54,11 +63,25 @@ Everything else (Node.js, nanoclaw, Docker or Apple Container) is installed auto
 
 ### Option 1 — One-line terminal install (recommended)
 
+**macOS:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/perweum/claw-studio/main/install.sh | bash
 ```
 
 This installs nanoclaw and all dependencies, then creates a **Claw Studio** app in `/Applications` with no Gatekeeper warnings — the app is assembled locally on your machine so macOS never quarantines it. Find it in Launchpad or Spotlight when the install finishes.
+
+**Linux (Ubuntu/Debian/Fedora):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/perweum/claw-studio/main/install.sh | bash
+```
+
+The same script detects Linux and uses `apt` or `dnf` to install Node.js 20 LTS and Docker Engine. nanoclaw is registered as a `systemd` user service that starts on login. When done, start Claw Studio with:
+
+```bash
+cd ~/claw-studio && npm run dev
+```
+
+Then open [http://localhost:5275](http://localhost:5275) in your browser.
 
 ### Option 2 — macOS App download
 
@@ -74,7 +97,7 @@ Then double-click normally. You only need to do this once. The DMG also includes
 
 On first launch, the setup wizard will:
 1. Confirm your nanoclaw installation (auto-detected in most cases)
-2. Ask for your Anthropic API key
+2. Ask for your Anthropic API key (and remind you that a credit card is required to activate your account)
 3. Offer to create your first bot immediately
 
 ### Updating
@@ -106,24 +129,46 @@ Click **+ New bot** in the toolbar. Give it a name and optionally connect an out
 
 Use the toolbar buttons or `Cmd/Ctrl+K` to open the command palette and add nodes. Connect nodes by dragging from a source handle to a target handle. Click any node to open its settings panel on the right.
 
+**Canvas keyboard shortcuts:**
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd/Ctrl+Z` | Undo |
+| `Cmd/Ctrl+Shift+Z` | Redo |
+| `Cmd/Ctrl+S` | Save |
+| `Cmd/Ctrl+K` | Open command palette |
+| `Delete` | Delete selected node |
+| `Escape` | Close palette / picker |
+
 **Node types:**
 
 | Node | What it does |
 |------|-------------|
-| **Trigger** | Starts the pipeline — schedule (cron), webhook, or message |
+| **Trigger** | Starts the pipeline — schedule (cron), message, or manual. One trigger node can have multiple trigger conditions. |
 | **Agent** | A Claude agent with a system prompt and optional tools |
 | **Tool** | Gives an agent capabilities — Bash scripts or MCP services |
 | **Memory** | Reads from or writes to the group's persistent memory |
 | **Transform** | Formats, truncates, or extracts data |
 | **Condition** | Branches the pipeline based on a true/false check |
 | **Router** | Sends output to different paths based on content |
-| **Output** | Sends a message or calls a webhook |
+| **Output** | Sends a message, saves to a file, or POSTs to a webhook URL |
 | **File** | Reads or writes a file in the group's workspace |
 | **Comment** | Adds a note to the canvas (not deployed) |
 
+> **How logic nodes work:** Condition, Router, Transform, Memory, and File nodes add instructions to your agent's system prompt — they're not runtime middleware that automatically intercepts output. The agent reads all instructions and decides how to apply them when it runs.
+
+### Multi-trigger bots
+
+A single Trigger node can combine multiple trigger types. For example, a bot that checks prices every morning but also responds when you message it manually:
+
+1. Set the primary trigger to **On a schedule** with your cron expression
+2. Click **+ Add another trigger** and choose **When a message is received**
+
+This is the recommended approach — do not create two separate Trigger nodes.
+
 ### Using the AI assistant
 
-Type in the chat panel on the left. Examples:
+Type in the chat panel on the left. The assistant builds your pipeline from a plain-English description and asks clarifying questions with clickable option buttons when it needs your input. Examples:
 
 > "Add a morning briefing that runs at 7am, reads my Gmail and calendar, and sends a summary to Telegram"
 
@@ -131,12 +176,20 @@ Type in the chat panel on the left. Examples:
 
 > "Make the agent more concise"
 
+The assistant is aware of your connected channels — if you say "send to Slack" and Slack is set up, it will use Slack. If not, it will tell you and suggest an alternative.
+
 ### Deploying
 
-Click **Deploy** in the toolbar. Claw Studio will:
+Click **⬆ Deploy** in the toolbar. Claw Studio will:
 - Write the agent's `CLAUDE.md` instructions to the nanoclaw group
 - Register any schedule triggers in nanoclaw's database
 - Show a summary of what was done automatically and what still needs manual setup (e.g. API keys, channel registration)
+
+### Running a bot immediately
+
+Click **▶ Run now** in the toolbar to trigger the bot's scheduled task right away, without waiting for the next cron tick. Useful for testing after deploying. A confirmation message appears for a few seconds showing how many tasks were triggered and where the results will be sent.
+
+> Run now only works for bots with schedule triggers that have been deployed. If the button shows an error, make sure you've clicked Deploy first.
 
 ### Backing up your bots
 
@@ -264,6 +317,19 @@ OAuth is handled automatically — no API key is ever stored in the node config.
 
 </details>
 
+<details>
+<summary><strong>🐙 GitHub</strong> — PR reviews, issues, CI status, skill required</summary>
+
+GitHub integration is available via the `/add-github` skill. Once installed, agents can:
+- List open pull requests
+- Read PR diffs and post review comments
+- Check CI status
+- Create and comment on issues
+
+Ask in the chat: *"Set up GitHub"* — the assistant will walk through generating a Personal Access Token and installing the `gh` CLI into the agent container.
+
+</details>
+
 ---
 
 ## Project Structure
@@ -272,6 +338,7 @@ OAuth is handled automatically — no API key is ever stored in the node config.
 claw-studio/
 ├── chat-plugin.ts        # Vite dev-server plugin — API routes + Claude integration
 ├── vite.config.ts        # Vite config, loads the plugin
+├── install.sh            # One-line installer for macOS and Linux
 ├── src/
 │   ├── App.tsx           # Root component, layout, keyboard shortcuts
 │   ├── store.ts          # Zustand state — nodes, edges, group, deploy
@@ -280,7 +347,7 @@ claw-studio/
 │   ├── components/
 │   │   ├── ChatPanel.tsx       # AI assistant sidebar (left)
 │   │   ├── NodePanel.tsx       # Node settings panel (right, opens on selection)
-│   │   ├── Toolbar.tsx         # Top bar — bots, deploy, palette, backup
+│   │   ├── Toolbar.tsx         # Top bar — bots, deploy, run now, palette, backup
 │   │   ├── GroupPicker.tsx     # Bot selector / new bot modal
 │   │   ├── SetupWizard.tsx     # First-run wizard
 │   │   ├── CommandPalette.tsx  # Node type picker (Cmd+K)
@@ -309,11 +376,15 @@ claw-studio/
 | `GET /api/config` | Check if Anthropic API key is configured |
 | `POST /api/config` | Write API key to nanoclaw's `.env` |
 | `GET /api/groups` | List nanoclaw groups |
+| `GET /api/groups/channels` | List registered channels (Telegram, Slack, etc.) |
 | `GET /api/groups/:folder/blueprint` | Load a group's visual blueprint |
 | `PUT /api/groups/:folder/blueprint` | Save a group's visual blueprint |
 | `POST /api/groups/:folder/deploy` | Generate CLAUDE.md + register schedules |
-| `GET /api/groups/channels` | List registered channels (Telegram, Slack, etc.) |
-| `POST /api/chat` | Stream a Claude response for the AI assistant |
+| `POST /api/groups/:folder/run` | Trigger scheduled tasks immediately (Run now) |
+| `GET /api/groups/:folder/runs` | Get recent run history and last run status |
+| `POST /api/groups/:folder/register` | Register a group with a channel JID |
+| `POST /api/chat` | Run the AI assistant (agentic loop with tools) |
+| `GET /api/templates` | List starter blueprint templates |
 | `GET /api/backup` | Download a zip backup of all bots and data |
 
 ---
@@ -371,6 +442,10 @@ File contents read by the assistant (CLAUDE.md, logs, etc.) are passed as tool r
 
 Yes. Claw Studio is just the editor — your bots run inside **nanoclaw**, which is a separate background service. Closing the Claw Studio browser tab or terminal has no effect on your running bots.
 
+### Does it run on Linux?
+
+Yes. The installer (`install.sh`) supports Ubuntu 22.04+, Debian, and Fedora. It installs Node.js 20, Docker Engine, and registers nanoclaw as a systemd user service. There is no macOS `.app` on Linux — start Claw Studio from the terminal with `npm run dev` and open [http://localhost:5275](http://localhost:5275).
+
 ### How do I move my bots to a new computer?
 
 Use the **⋯ → Back up all bots** option in the toolbar. This downloads a zip containing everything nanoclaw needs: your bots, their memory, conversation history, API keys, and channel credentials.
@@ -384,13 +459,15 @@ Everything picks up exactly where it left off.
 
 ### How much does it cost to run?
 
-The AI assistant in Claw Studio uses Claude via the Anthropic API, which is pay-as-you-go. Designing bots (chatting with the assistant) typically costs a few cents per session. Running bots depends on how often they trigger — a daily briefing bot costs roughly $0.01–0.05 per day.
+The AI assistant in Claw Studio uses Claude via the Anthropic API, which is pay-as-you-go. **You need to add a credit card** at [console.anthropic.com/settings/billing](https://console.anthropic.com/settings/billing) to activate your account — this is an Anthropic requirement, not Claw Studio's.
+
+Designing bots (chatting with the assistant) typically costs a few cents per session. Running bots depends on how often they trigger — a daily briefing bot costs roughly $0.01–0.05 per day.
 
 You can monitor usage at [console.anthropic.com](https://console.anthropic.com).
 
 ### Can I use Claw Studio without nanoclaw?
 
-No — Claw Studio is a visual editor for nanoclaw configurations. It needs nanoclaw running to save blueprints, register schedules, and deploy bots. [Install nanoclaw here](https://github.com/nanoclaw-ai/nanoclaw).
+No — Claw Studio is a visual editor for nanoclaw configurations. It needs nanoclaw running to save blueprints, register schedules, and deploy bots. [Install nanoclaw here](https://github.com/qwibitai/nanoclaw).
 
 ### How do I add a Telegram / WhatsApp / Slack channel?
 
@@ -400,12 +477,21 @@ Open the **+ New bot** modal and click one of the channel buttons (Telegram, Wha
 
 Your bots and their data live in nanoclaw, not in Claw Studio. Updating Claw Studio (pulling the latest git version) only changes the editor. Your bots continue running unaffected.
 
-### The AI assistant added nodes but nothing happened after deploying
+### I deployed a bot but nothing happened
 
-Deploying writes a `CLAUDE.md` file to the group and registers any schedules, but your bot only responds to messages if nanoclaw is running and the group has a registered channel. Check:
-1. nanoclaw is running (`launchctl list | grep nanoclaw` on macOS)
+Deploying writes a `CLAUDE.md` file to the group and registers any schedules. Check:
+1. nanoclaw is running (`launchctl list | grep nanoclaw` on macOS, `systemctl --user status nanoclaw` on Linux)
 2. The group has a channel connected (visible in the **My bots** list)
 3. The deploy summary didn't show any red "needs attention" items
+4. Use **▶ Run now** to trigger the bot immediately and confirm it sends output before relying on the schedule
+
+### My bot runs on a schedule — can I trigger it manually?
+
+Yes — click **▶ Run now** in the toolbar. This sets the task's next run time to now so the scheduler picks it up within seconds. Results arrive via the bot's connected output channel (Telegram, file, etc.).
+
+### Why did the AI assistant suggest Telegram when I wanted Slack?
+
+The assistant reads your connected channels from nanoclaw and should suggest the right one. If it still defaults to Telegram, it likely means Slack isn't set up yet in nanoclaw. Ask the assistant: *"Set up Slack"* — it will walk you through connecting it.
 
 ### Can multiple people use the same nanoclaw?
 
@@ -422,6 +508,7 @@ Contributions are welcome! A few things to know:
 - The canvas is **React Flow** (`@xyflow/react`)
 - The backend plugin (`chat-plugin.ts`) runs inside the Vite dev server — no Express or separate server
 - nanoclaw's `better-sqlite3` is loaded via `createRequire` from nanoclaw's own `node_modules`
+- The AI chat uses an agentic loop (up to 12 turns) with three tools: `run_command`, `read_file`, `write_env_key`
 
 ```bash
 npm install && npm run dev   # develop

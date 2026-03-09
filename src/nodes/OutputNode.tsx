@@ -9,11 +9,17 @@ const DEST_ICONS: Record<string, string> = {
 
 export function OutputNode({ data, selected }: NodeProps) {
   const d = data as unknown as OutputNodeData;
-  const needsSetup = d.destination === 'webhook' && !String(d.config || '').trim();
+  const config = String(d.config || '').trim();
+  const needsSetup =
+    (d.destination === 'webhook' && !config) ||
+    (d.destination === 'file' && !config);
+  const emptyHint =
+    d.destination === 'webhook' ? 'Set webhook URL — click to configure' :
+    d.destination === 'file'    ? 'Set file path — click to configure' : '';
   return (
     <div className={`bp-node bp-node--output ${selected ? 'bp-node--selected' : ''}`}>
       {needsSetup && (
-        <span className="bp-node__warning" title="Set the webhook URL — click to configure">!</span>
+        <span className="bp-node__warning" title={`${emptyHint}`}>!</span>
       )}
       <Handle type="target" position={Position.Top} />
       <div className="bp-node__header">
@@ -22,7 +28,10 @@ export function OutputNode({ data, selected }: NodeProps) {
       </div>
       <div className="bp-node__label">{d.label}</div>
       {needsSetup && (
-        <div className="bp-node__preview bp-node__preview--empty">Set webhook URL — click to configure</div>
+        <div className="bp-node__preview bp-node__preview--empty">{emptyHint}</div>
+      )}
+      {!needsSetup && config && (
+        <div className="bp-node__preview">{config.slice(0, 50)}</div>
       )}
     </div>
   );

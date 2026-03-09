@@ -15,6 +15,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { GroupPicker } from './components/GroupPicker';
 import { NodePanel } from './components/NodePanel';
 import { SetupWizard } from './components/SetupWizard';
+import { StatusPanel } from './components/StatusPanel';
 import { Toolbar } from './components/Toolbar';
 import { nodeTypes } from './nodes';
 import { useStore } from './store';
@@ -67,6 +68,33 @@ export default function App() {
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
   const [showWizard, setShowWizard] = useState(false);
   const [chatPrefill, setChatPrefill] = useState<string | null>(null);
+  const [statusOpen, setStatusOpen] = useState(false);
+
+  const { openGroup, saveDraftNow, saveStatus, undo, redo, canUndo, canRedo } = useStore();
+
+  // Restore last open group on mount
+  useEffect(() => {
+    const lastGroup = localStorage.getItem('cs:lastGroup');
+    if (lastGroup) openGroup(lastGroup);
+  }, [openGroup]);
+
+  // Auto-save draft when there are unsaved changes (debounced)
+  useEffect(() => {
+    if (saveStatus !== 'unsaved') return;
+    const t = setTimeout(() => saveDraftNow(), 1000);
+    return () => clearTimeout(t);
+  }, [saveStatus, saveDraftNow]);
+
+  // Warn before leaving with unsaved changes
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (saveStatus === 'unsaved') {
+        e.preventDefault();
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [saveStatus]);
 
   useEffect(() => {
     // Show wizard if nanoclaw path or API key is not configured
@@ -84,6 +112,22 @@ export default function App() {
         e.preventDefault();
         setPaletteOpen((o) => !o);
       }
+      // Undo: Cmd+Z / Ctrl+Z
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'z') {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+          e.preventDefault();
+          if (canUndo) undo();
+        }
+      }
+      // Redo: Cmd+Shift+Z / Ctrl+Shift+Z / Ctrl+Y
+      if (((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'z') || ((e.ctrlKey) && e.key === 'y')) {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+          e.preventDefault();
+          if (canRedo) redo();
+        }
+      }
       if (e.key === 'Escape') {
         setPaletteOpen(false);
         setGroupPickerOpen(false);
@@ -92,7 +136,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [canUndo, canRedo, undo, redo]);
 
   return (
     <ReactFlowProvider>
@@ -101,6 +145,7 @@ export default function App() {
           onOpenPalette={() => setPaletteOpen(true)}
           onOpenGroupPicker={() => { setGroupPickerMode('list'); setGroupPickerOpen(true); }}
           onNewBot={() => { setGroupPickerMode('new'); setGroupPickerOpen(true); }}
+          onOpenStatus={() => setStatusOpen(true)}
         />
         <div className="app__body">
           <ChatPanel prefill={chatPrefill} onPrefillUsed={() => setChatPrefill(null)} />
@@ -138,6 +183,7 @@ export default function App() {
           onClose={() => setCtxMenu(null)}
         />
       )}
+      {statusOpen && <StatusPanel onClose={() => setStatusOpen(false)} />}
     </ReactFlowProvider>
   );
 }

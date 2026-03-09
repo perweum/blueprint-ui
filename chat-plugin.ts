@@ -27,7 +27,7 @@ const _require = createRequire(import.meta.url);
 let _Database: (new (path: string, opts?: object) => unknown) | null = null;
 function getDatabase(nanoclawPath: string) {
   if (!_Database) {
-    _Database = getDatabase(nanoclawPath);
+    _Database = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3')) as new (path: string, opts?: object) => unknown;
   }
   return _Database!;
 }
@@ -224,44 +224,89 @@ const SYSTEM = `You are an AI assistant embedded in Claw Studio — a visual nod
 ## Node Types
 
 **trigger** — When does the pipeline run?
-- label, triggerType (message | schedule | webhook | manual), config
+- label, triggerType (message | schedule | webhook | manual), config, additionalTriggers (optional array)
 - schedule config: cron expression like "0 8 * * 1-5" (weekdays at 8am)
+- message config: keyword filter (leave blank to respond to all messages)
+- additionalTriggers: array of {triggerType, config} for bots that run on MULTIPLE conditions
+  - Use when the user wants a bot that BOTH runs on a schedule AND responds to messages
+  - Example: daily price check that also runs on demand → schedule primary + message additional
+  - Do NOT create two separate trigger nodes for this — use one trigger node with additionalTriggers
 
 **agent** — The AI brain that thinks and decides
 - label, model (claude-opus-4-6 | claude-sonnet-4-6 | claude-haiku-4-5-20251001), systemPrompt
 - Use Opus for complex reasoning, Sonnet for general work, Haiku for fast/cheap tasks
 - Write detailed, specific system prompts — they define the agent's personality and behavior
+- One pipeline can have multiple agents; extras become sub-agents the primary can delegate to
 
-**tool** — Connects the agent to the outside world
+**tool** — Connects the agent to the outside world (a tool node gives capabilities to ALL agents in the pipeline)
 - label, toolType (bash | search | mcp), config
-- bash: a shell command the agent can run
-- search: web search capability (no config needed)
+- bash: a shell command the agent can run; config is the shell script/command
+  - The agent can call this tool as many times as needed during a run
+  - Example: curl https://api.example.com/data | python3 -c "import sys,json; print(json.load(sys.stdin)['price'])"
+- search: web search capability, no config needed — the agent searches the web autonomously
 - mcp: a plugin that connects to an external service (Gmail, Calendar, Weather, etc.)
   - MCP config format: {"server": "server-name", "action": "action.name"}
   - Common servers: gmail-mcp, google-calendar-mcp, openweathermap-mcp, newsapi-mcp
+- A pipeline can have multiple tool nodes — add one per capability
 
-**condition** — Branch based on a simple rule (no AI needed)
+**condition** — Branch the pipeline based on a simple text rule (no AI, instant decision)
 - label, conditionType (contains | regex | equals | always_true), value
-- Has two output handles: "true" and "false"
+- Has two output handles: "true" (condition matched) and "false" (condition did not match)
+- conditionType meanings:
+  - contains: input text includes the value string (case-insensitive)
+  - regex: input text matches the regex pattern (e.g. /^urgent/i)
+  - equals: input text exactly matches the value
+  - always_true: always takes the "true" branch (useful as a pass-through connector)
+- value MUST be set for contains/regex/equals — leave empty only for always_true
+- Use condition for cheap yes/no decisions; use router when the AI needs to interpret context
 
-**router** — Let the AI decide which branch to take
-- label, routingPrompt, branches (array of branch names)
-- Branch handles: "branch-0", "branch-1", etc.
+**router** — Let the AI decide which branch to take based on meaning
+- label, routingPrompt, branches (array of branch names — minimum 2)
+- Branch handles: "branch-0", "branch-1", etc. (connect each to the appropriate next node)
+- routingPrompt: tell the AI exactly when to choose each branch — be specific
+  - Good: "Route to 'Urgent' if the message mentions a deadline today or uses words like 'ASAP' or 'critical'. Otherwise route to 'Normal'."
+  - Bad: "Route appropriately."
+- branches: each string becomes a labeled output handle, e.g. ["Urgent", "Normal", "Spam"]
 
-**transform** — Reshape or format data
+**transform** — Reshape or reformat text without using AI
 - label, transformType (template | truncate | json_wrap | extract), config
+- transform types:
+  - template: fill a fixed template with input data; use {{input}} as the placeholder; config is the template text
+  - truncate: cut input to a max character count; config is the number (e.g. "2000")
+  - json_wrap: wrap the input string in a JSON object {"result": "..."}; no config needed
+  - extract: pull out a specific piece of text from the input using a regex; config is the regex pattern
+- Transforms run instantly, cost nothing, and don't use Claude — prefer them over agents for simple formatting
 
-**memory** — Remember things between conversations
+**memory** — Read or write persistent data that survives between bot runs
 - label, operation (read | write | both), scope (group | global), key (optional)
+- operation:
+  - read: load stored data into the pipeline so the next agent can see it
+  - write: save the pipeline's current result to memory for future runs
+  - both: read first (pass to agent), then write the agent's output back (useful for running summaries)
+- scope:
+  - group: memory is private to this bot — different bots can't see it
+  - global: memory is shared across ALL bots — useful for shared context like user preferences
+- key: a name for what's stored (e.g. "price_history", "last_run_result"); leave blank to use the whole memory file
+- Memory persists indefinitely until overwritten; always pair a "write" memory with a "read" memory on the next run
 
-**file** — Read or write files in the agent's workspace
+**file** — Give the agent access to files in its isolated workspace
 - label, path, permissions (read | readwrite)
+- path: must start with /workspace — the agent's sandboxed filesystem (e.g. /workspace/data, /workspace/reports)
+- permissions: "read" = agent can only read the file; "readwrite" = agent can read and modify/create files
+- Files at /workspace persist between runs of the same bot; deleted when the bot is removed
+- Use file nodes when the agent needs to read a config file, write a report, or maintain a local database
 
-**output** — Send the result somewhere
+**output** — Send the pipeline result somewhere
 - label, destination (telegram | file | webhook), config
+- telegram: sends the result as a Telegram message to the registered chat; no config needed
+- file: saves the result to a file; config is the file path (e.g. /workspace/report.md)
+- webhook: POSTs the result to a URL; config is the full URL (e.g. https://hooks.zapier.com/...)
+- Always include an output node — without one the bot runs silently with no visible result
+- Telegram output requires the bot to be registered with a Telegram channel in nanoclaw
 
-**comment** — A sticky note on the canvas to explain the design
-- text, color (hex)
+**comment** — A sticky note on the canvas (never deployed, never affects the pipeline)
+- text, color (hex string, e.g. "#4b5563" for grey, "#3b82f6" for blue, "#10b981" for green)
+- Use comments to label sections of a complex pipeline or leave notes for yourself
 
 ## Wires
 
@@ -474,24 +519,49 @@ You MUST respond with valid JSON only — no markdown, no code fences, no extra 
 
 {
   "message": "string — conversational response shown in the chat UI",
-  "operations": [array of canvas operations, empty if no changes needed]
+  "operations": [array of canvas operations, empty if no changes needed],
+  "options": ["Option A", "Option B"]  (optional — see below)
 }
+
+### When to use "options"
+
+Include "options" whenever you need the user to make a clear choice before you can proceed. Use it instead of asking an open-ended question. Examples:
+- Which channel should results go to? → ["Telegram", "File", "Webhook"]
+- How often should it run? → ["Every morning at 8am", "Every hour", "Every Monday"]
+- What kind of search? → ["Web search", "Wikipedia only", "News only"]
+- Are you ready to deploy? → ["Yes, deploy it", "Let me review first"]
+
+Rules:
+- 2–5 short options only. Each option is a phrase that will be sent as the user's next message when they click it.
+- Phrase each option as if the user is saying it: "Every morning at 8am", not "8am daily schedule".
+- Only use options for genuine user choices. Don't use them for yes/no confirmations where the user can just type — use pendingCommand confirmation for that instead.
+- Omit the field entirely if no choices are needed.
 
 Operation types:
 - {"op": "clear"}
 - {"op": "addNode", "tempId": "t1", "kind": "trigger", "label": "...", "triggerType": "message", "config": "", "x": 200, "y": 80}
+- {"op": "addNode", "tempId": "t1", "kind": "trigger", "label": "...", "triggerType": "schedule", "config": "0 9 * * *", "additionalTriggers": [{"triggerType": "message", "config": ""}], "x": 200, "y": 80}
 - {"op": "addNode", "tempId": "t2", "kind": "agent", "label": "...", "model": "claude-sonnet-4-6", "systemPrompt": "...", "x": 200, "y": 300}
-- {"op": "addNode", "tempId": "t3", "kind": "tool", "label": "...", "toolType": "bash", "config": "...", "x": 200, "y": 520}
-- {"op": "addNode", "tempId": "t4", "kind": "condition", "label": "...", "conditionType": "contains", "value": "...", "x": 200, "y": 300}
-- {"op": "addNode", "tempId": "t5", "kind": "router", "label": "...", "routingPrompt": "...", "branches": ["Option A", "Option B"], "x": 200, "y": 520}
-- {"op": "addNode", "tempId": "t6", "kind": "transform", "label": "...", "transformType": "template", "config": "...", "x": 200, "y": 300}
-- {"op": "addNode", "tempId": "t7", "kind": "memory", "label": "...", "operation": "read", "scope": "group", "key": "ctx", "x": 200, "y": 300}
-- {"op": "addNode", "tempId": "t8", "kind": "file", "label": "...", "path": "/workspace", "permissions": "readwrite", "x": 200, "y": 300}
+- {"op": "addNode", "tempId": "t3", "kind": "tool", "label": "...", "toolType": "bash", "config": "curl https://api.example.com/data", "x": 200, "y": 520}
+- {"op": "addNode", "tempId": "t3b", "kind": "tool", "label": "...", "toolType": "search", "config": "", "x": 200, "y": 520}
+- {"op": "addNode", "tempId": "t3c", "kind": "tool", "label": "...", "toolType": "mcp", "config": "{\"server\": \"gmail-mcp\", \"action\": \"list_emails\", \"query\": \"is:unread\"}", "x": 200, "y": 520}
+- {"op": "addNode", "tempId": "t4", "kind": "condition", "label": "...", "conditionType": "contains", "value": "urgent", "x": 200, "y": 300}
+- {"op": "addNode", "tempId": "t4b", "kind": "condition", "label": "...", "conditionType": "always_true", "value": "", "x": 200, "y": 300}
+- {"op": "addNode", "tempId": "t5", "kind": "router", "label": "...", "routingPrompt": "Route to Urgent if the message contains a deadline or critical keyword, otherwise route to Normal.", "branches": ["Urgent", "Normal"], "x": 200, "y": 520}
+- {"op": "addNode", "tempId": "t6", "kind": "transform", "label": "...", "transformType": "template", "config": "Summary for {{date}}:\n\n{{input}}", "x": 200, "y": 300}
+- {"op": "addNode", "tempId": "t6b", "kind": "transform", "label": "...", "transformType": "truncate", "config": "2000", "x": 200, "y": 300}
+- {"op": "addNode", "tempId": "t7", "kind": "memory", "label": "...", "operation": "read", "scope": "group", "key": "price_history", "x": 200, "y": 300}
+- {"op": "addNode", "tempId": "t7b", "kind": "memory", "label": "...", "operation": "write", "scope": "group", "key": "price_history", "x": 200, "y": 300}
+- {"op": "addNode", "tempId": "t8", "kind": "file", "label": "...", "path": "/workspace/data", "permissions": "readwrite", "x": 200, "y": 300}
 - {"op": "addNode", "tempId": "t9", "kind": "output", "label": "...", "destination": "telegram", "config": "", "x": 200, "y": 740}
-- {"op": "addNode", "tempId": "t10", "kind": "comment", "label": "Comment", "text": "...", "color": "#4b5563", "x": 400, "y": 80}
+- {"op": "addNode", "tempId": "t9b", "kind": "output", "label": "...", "destination": "file", "config": "/workspace/report.md", "x": 200, "y": 740}
+- {"op": "addNode", "tempId": "t9c", "kind": "output", "label": "...", "destination": "webhook", "config": "https://hooks.zapier.com/hooks/catch/...", "x": 200, "y": 740}
+- {"op": "addNode", "tempId": "t10", "kind": "comment", "text": "...", "color": "#4b5563", "x": 400, "y": 80}
 - {"op": "connect", "from": "t1", "to": "t2"}
 - {"op": "connect", "from": "t4", "to": "t5", "handle": "true"}
+- {"op": "connect", "from": "t4", "to": "t5", "handle": "false"}
 - {"op": "connect", "from": "t5", "to": "t6", "handle": "branch-0"}
+- {"op": "connect", "from": "t5", "to": "t6", "handle": "branch-1"}
 - {"op": "updateNode", "id": "node-5", "data": {"label": "New Name"}}
 - {"op": "deleteNode", "id": "node-5"}
 
@@ -557,6 +627,32 @@ const SETUP_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// ── JSON extraction (brace-balanced, handles strings with { } inside) ─────────
+
+function extractJsonObject(text: string): string | null {
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 // ── Model selection ───────────────────────────────────────────────────────────
 
 const SETUP_KEYWORDS = /\b(install|setup|set up|configure|add|connect|telegram|slack|whatsapp|discord|gmail|oauth|token|register|troubleshoot|debug|not working|restart|service|skill|error|failed|broken)\b/i;
@@ -565,6 +661,33 @@ function resolveModel(model: string, messages: Array<{ role: string; content: st
   if (model !== 'auto') return model;
   const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content ?? '';
   return SETUP_KEYWORDS.test(lastUser) ? 'claude-opus-4-6' : 'claude-sonnet-4-6';
+}
+
+// ── Connected channels context ────────────────────────────────────────────────
+
+function readConnectedChannelsContext(nanoclawPath: string): string {
+  try {
+    const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+    if (!fs.existsSync(DB_PATH)) return '';
+    const Database = getDatabase(nanoclawPath);
+    const db = new Database(DB_PATH, { readonly: true }) as { prepare: (s: string) => { all: () => unknown[] }; close: () => void };
+    const rows = db.prepare(`
+      SELECT jid, name, folder FROM registered_groups ORDER BY name
+    `).all() as Array<{ jid: string; name: string; folder: string }>;
+    db.close();
+    if (rows.length === 0) return '';
+    const lines = rows.map(r => {
+      const type = r.jid.startsWith('tg:') ? 'Telegram' :
+                   r.jid.startsWith('wa:') ? 'WhatsApp' :
+                   r.jid.startsWith('slack:') ? 'Slack' :
+                   r.jid.startsWith('discord:') ? 'Discord' :
+                   r.jid.startsWith('scheduled:') ? 'Scheduled-only' : 'Unknown';
+      return `- ${type}: "${r.name}" (folder: ${r.folder})`;
+    });
+    return `\n\n## Connected Channels\n\nThe following channels are set up in nanoclaw:\n${lines.join('\n')}\n\nWhen the user's request involves sending output to a specific service (Telegram, Slack, WhatsApp, etc.), match it to the connected channels above. Prefer connected channels over unconnected ones. If a channel type the user asks for is NOT in this list, mention that they'll need to set it up first and suggest telegram or file as an alternative.`;
+  } catch {
+    return '';
+  }
 }
 
 // ── Agentic chat loop with tools ──────────────────────────────────────────────
@@ -576,6 +699,7 @@ interface ChatApiResponse {
   operations?: unknown[];
   commandLog?: CommandLogEntry[];
   pendingCommand?: { cmd: string; description: string };
+  options?: string[];
 }
 
 async function runChatWithTools(
@@ -583,10 +707,14 @@ async function runChatWithTools(
   graphState: string,
   confirmedCommands: string[],
   model = 'auto',
+  onProgress?: (event: { type: 'running'; cmd: string; description: string }) => void,
 ): Promise<ChatApiResponse> {
   const nanoclawPath = detectNanoclawPath();
   const client = makeClient();
-  const systemWithGraph = graphState ? `${SYSTEM}\n\n## Current Canvas\n\n${graphState}` : SYSTEM;
+  const channelContext = nanoclawPath ? readConnectedChannelsContext(nanoclawPath) : '';
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const dateContext = `\n\n## Today's Date\n\nToday is ${today}. When the user mentions dates without a year (e.g. "March 28"), always use ${today.slice(0, 4)} unless context clearly indicates otherwise.`;
+  const systemWithGraph = (graphState ? `${SYSTEM}\n\n## Current Canvas\n\n${graphState}` : SYSTEM) + channelContext + dateContext;
   const commandLog: CommandLogEntry[] = [];
   const resolvedModel = resolveModel(model, messages);
 
@@ -595,7 +723,7 @@ async function runChatWithTools(
     content: m.content,
   }));
 
-  for (let turn = 0; turn < 12; turn++) {
+  for (let turn = 0; turn < 40; turn++) {
     const response = await client.messages.create({
       model: resolvedModel,
       max_tokens: 4096,
@@ -607,11 +735,16 @@ async function runChatWithTools(
 
     if (response.stop_reason !== 'tool_use') {
       const textBlock = response.content.find((b) => b.type === 'text');
-      const rawText = textBlock?.type === 'text' ? textBlock.text : '{}';
-      const first = rawText.indexOf('{');
-      const last = rawText.lastIndexOf('}');
-      if (first === -1 || last === -1) throw new Error('No JSON in response');
-      const parsed = JSON.parse(rawText.slice(first, last + 1)) as ChatApiResponse;
+      const rawText = textBlock?.type === 'text' ? textBlock.text : '';
+      const jsonStr = extractJsonObject(rawText);
+      let parsed: ChatApiResponse;
+      if (jsonStr) {
+        const candidate = JSON.parse(jsonStr) as ChatApiResponse;
+        // If the extracted JSON has no message (e.g. it grabbed an operation object), fall back to raw text
+        parsed = candidate.message ? candidate : { message: rawText || '(No response)', operations: [] };
+      } else {
+        parsed = { message: rawText || '(No response)', operations: [] };
+      }
       return { ...parsed, commandLog: commandLog.length ? commandLog : undefined };
     }
 
@@ -637,6 +770,7 @@ async function runChatWithTools(
         } else if (!nanoclawPath) {
           result = 'ERROR: Nanoclaw path not configured';
         } else {
+          onProgress?.({ type: 'running', cmd: command, description });
           const exec = await executeCommand(command, nanoclawPath);
           commandLog.push({ cmd: command, output: exec.output, ok: exec.ok, description });
           result = exec.ok ? exec.output : `ERROR: ${exec.output}`;
@@ -802,7 +936,7 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
     try {
       const folder = parts[0];
       if (!folder || !isValidFolder(folder)) { res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid folder name' })); return; }
-      const body = JSON.parse(await readBody(req)) as { channelJid: string };
+      const body = JSON.parse(await readBody(req)) as { channelJid: string; type?: string };
       if (!body.channelJid) { res.writeHead(400); res.end(JSON.stringify({ error: 'channelJid required' })); return; }
       const nanoclawPath = detectNanoclawPath();
       if (!nanoclawPath) { res.writeHead(503); res.end(JSON.stringify({ error: 'Nanoclaw not found' })); return; }
@@ -810,13 +944,90 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
       const Database = getDatabase(nanoclawPath);
       const db = new Database(DB_PATH);
       const displayName = folder.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
-      db.prepare(`
-        INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main, container_config)
-        VALUES (?, ?, ?, '@', datetime('now'), 0, 0, ?)
-      `).run(`scheduled:${folder}`, displayName, folder, JSON.stringify({ outputJid: body.channelJid }));
+
+      if (body.type === 'message') {
+        // Message trigger: register the real channel JID directly so nanoclaw routes messages to this folder
+        db.prepare(`
+          INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main, container_config)
+          VALUES (?, ?, ?, '@', datetime('now'), 0, 0, NULL)
+        `).run(body.channelJid, displayName, folder);
+      } else {
+        // Schedule trigger: keep scheduled: jid, store outputJid in container_config
+        db.prepare(`
+          INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main, container_config)
+          VALUES (?, ?, ?, '@', datetime('now'), 0, 0, ?)
+        `).run(`scheduled:${folder}`, displayName, folder, JSON.stringify({ outputJid: body.channelJid }));
+      }
       db.close();
       res.writeHead(200);
       res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+    return;
+  }
+
+  // ── POST /api/groups/:folder/run — trigger scheduled task immediately ────────
+  if (req.method === 'POST' && parts.length === 2 && parts[1] === 'run') {
+    try {
+      const folder = parts[0];
+      if (!folder || !isValidFolder(folder)) { res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid folder name' })); return; }
+      const nanoclawPath = detectNanoclawPath();
+      if (!nanoclawPath) { res.writeHead(503); res.end(JSON.stringify({ error: 'Nanoclaw not found' })); return; }
+      const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+      if (!fs.existsSync(DB_PATH)) { res.writeHead(404); res.end(JSON.stringify({ error: 'No tasks found' })); return; }
+      const Database = getDatabase(nanoclawPath);
+      const db = new Database(DB_PATH) as { prepare: (s: string) => { run: (...a: unknown[]) => { changes: number } }; close: () => void };
+      // Set next_run to 1 second in the past so the scheduler picks it up immediately
+      const result = db.prepare(`
+        UPDATE scheduled_tasks
+        SET next_run = datetime('now', '-1 second')
+        WHERE group_folder = ? AND status = 'active'
+      `).run(folder);
+      db.close();
+      if (result.changes === 0) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'No active scheduled tasks found for this bot. Deploy the blueprint first.' }));
+      } else {
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true, triggered: result.changes }));
+      }
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+    return;
+  }
+
+  // ── GET /api/groups/:folder/runs — recent run history ────────────────────────
+  if (req.method === 'GET' && parts.length === 2 && parts[1] === 'runs') {
+    try {
+      const folder = parts[0];
+      if (!folder || !isValidFolder(folder)) { res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid folder name' })); return; }
+      const nanoclawPath = detectNanoclawPath();
+      if (!nanoclawPath) { res.writeHead(503); res.end(JSON.stringify({ error: 'Nanoclaw not found' })); return; }
+      const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+      if (!fs.existsSync(DB_PATH)) { res.writeHead(200); res.end(JSON.stringify({ runs: [], task: null })); return; }
+      const Database = getDatabase(nanoclawPath);
+      const db = new Database(DB_PATH, { readonly: true }) as {
+        prepare: (s: string) => { all: (...a: unknown[]) => unknown[]; get: (...a: unknown[]) => unknown };
+        close: () => void;
+      };
+      // Get the scheduled task for this folder
+      const task = db.prepare(`
+        SELECT id, schedule_value, next_run, last_run, last_result, status
+        FROM scheduled_tasks WHERE group_folder = ? AND status = 'active' LIMIT 1
+      `).get(folder) as { id: string; schedule_value: string; next_run: string | null; last_run: string | null; last_result: string | null; status: string } | undefined;
+      // Get the 20 most recent runs
+      const runs = task ? db.prepare(`
+        SELECT run_at, duration_ms, status, result, error
+        FROM task_run_logs WHERE task_id = ?
+        ORDER BY run_at DESC LIMIT 20
+      `).all(task.id) : [];
+      db.close();
+      res.writeHead(200);
+      res.end(JSON.stringify({ task: task ?? null, runs }));
     } catch (err) {
       res.writeHead(500);
       res.end(JSON.stringify({ error: String(err) }));
@@ -940,19 +1151,83 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
         manual.push('No output node — add an Output node so the bot can send messages somewhere');
       }
 
+      // ── Collect all trigger entries (primary + additionalTriggers) ──
+      type TriggerEntry = { triggerType: string; config: string; label: string };
+      const allTriggerEntries: TriggerEntry[] = [];
+      for (const tr of triggers) {
+        const label = String(tr.data.label ?? 'Trigger');
+        allTriggerEntries.push({ triggerType: String(tr.data.triggerType || ''), config: String(tr.data.config || ''), label });
+        const additional = (tr.data.additionalTriggers as Array<{ triggerType: string; config: string }> | undefined) ?? [];
+        for (const at of additional) {
+          allTriggerEntries.push({ triggerType: String(at.triggerType || ''), config: String(at.config || ''), label });
+        }
+      }
+
       // ── Register schedule tasks ──
-      const scheduleTriggers = triggers.filter(n => n.data.triggerType === 'schedule');
-      for (const tr of scheduleTriggers) {
-        const cronExpr = String(tr.data.config || '').trim();
+      const scheduleTriggerEntries = allTriggerEntries.filter(t => t.triggerType === 'schedule');
+      // Compute the stable task IDs this blueprint will produce
+      const newTaskIds = scheduleTriggerEntries
+        .map(e => e.config.trim())
+        .filter(Boolean)
+        .map(cron => `blueprint:${folder}:${cron.replace(/\s+/g, '_')}`);
+      // Delete old tasks for this folder that are no longer in the blueprint
+      try {
+        const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+        if (fs.existsSync(DB_PATH)) {
+          const DbCtor = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+          const db = new DbCtor(DB_PATH);
+          if (newTaskIds.length > 0) {
+            const placeholders = newTaskIds.map(() => '?').join(',');
+            const removed = db.prepare(
+              `DELETE FROM scheduled_tasks WHERE group_folder = ? AND id LIKE 'blueprint:%' AND id NOT IN (${placeholders})`
+            ).run(folder, ...newTaskIds);
+            if (removed.changes > 0) done.push(`Removed ${removed.changes} old schedule(s) no longer in blueprint`);
+          } else {
+            // No schedule triggers in blueprint — remove all old blueprint tasks
+            const removed = db.prepare(`DELETE FROM scheduled_tasks WHERE group_folder = ? AND id LIKE 'blueprint:%'`).run(folder);
+            if (removed.changes > 0) done.push(`Removed ${removed.changes} old schedule(s) no longer in blueprint`);
+          }
+          db.close();
+        }
+      } catch { /* non-fatal */ }
+
+      for (const entry of scheduleTriggerEntries) {
+        const cronExpr = entry.config.trim();
         if (!cronExpr) {
-          manual.push(`Schedule trigger "${tr.data.label ?? 'Schedule'}" — set a cron expression (e.g. "0 8 * * *" for 8am daily)`);
+          manual.push(`Schedule trigger "${entry.label}" — set a cron expression (e.g. "0 8 * * *" for 8am daily)`);
           continue;
         }
-        const registered = tryRegisterSchedule(folder, cronExpr, String(tr.data.label ?? 'Scheduled task'));
+        const registered = tryRegisterSchedule(folder, cronExpr, entry.label);
         if (registered) {
           done.push(`Schedule registered: "${cronExpr}" — runs automatically`);
         } else {
           manual.push(`__UNREGISTERED_SCHEDULE__:${cronExpr}`);
+        }
+      }
+
+      // ── Check message triggers are connected to a channel ──
+      const messageTriggerEntries = allTriggerEntries.filter(t => t.triggerType === 'message');
+      if (messageTriggerEntries.length > 0) {
+        try {
+          const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+          if (fs.existsSync(DB_PATH)) {
+            const DbCtor = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+            const db = new DbCtor(DB_PATH, { readonly: true });
+            const row = db.prepare("SELECT jid, name FROM registered_groups WHERE folder = ? AND jid NOT LIKE 'scheduled:%' ORDER BY added_at DESC LIMIT 1").get(folder) as { jid: string; name: string } | undefined;
+            db.close();
+            if (!row) {
+              manual.push('__UNREGISTERED_MESSAGE_TRIGGER__');
+            } else {
+              done.push(`Message trigger: connected to ${row.name || row.jid}${messageTriggerEntries[0].config ? ` (keyword: "${messageTriggerEntries[0].config}")` : ' (all messages)'}`);
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // ── Flag webhook triggers without a path ──
+      for (const entry of allTriggerEntries) {
+        if (entry.triggerType === 'webhook' && !entry.config.trim()) {
+          manual.push(`Webhook trigger "${entry.label}" — set the incoming webhook path`);
         }
       }
 
@@ -1007,15 +1282,6 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
       }
       void gmailAuthorized; // suppress unused warning
 
-      // ── Flag empty schedule triggers ──
-      for (const tr of triggers) {
-        if (tr.data.triggerType === 'schedule' && !String(tr.data.config || '').trim()) {
-          // already handled above
-        } else if (tr.data.triggerType === 'webhook' && !String(tr.data.config || '').trim()) {
-          manual.push(`Webhook trigger "${tr.data.label ?? 'Webhook'}" — set the incoming webhook URL or path`);
-        }
-      }
-
       res.writeHead(200);
       res.end(JSON.stringify({ ok: true, preview: content, actions: { done, manual } }));
     } catch (err) {
@@ -1027,6 +1293,128 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
 
   res.writeHead(404);
   res.end(JSON.stringify({ error: 'Not found' }));
+}
+
+// ── Status panel API ──────────────────────────────────────────────────────────
+
+async function handleStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  res.setHeader('Content-Type', 'application/json');
+
+  if (req.method !== 'GET') {
+    res.writeHead(405);
+    res.end(JSON.stringify({ error: 'Method not allowed' }));
+    return;
+  }
+
+  try {
+    const nanoclawPath = detectNanoclawPath();
+    if (!nanoclawPath) {
+      res.writeHead(503);
+      res.end(JSON.stringify({ error: 'Nanoclaw installation not found' }));
+      return;
+    }
+
+    const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+    if (!fs.existsSync(DB_PATH)) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ groups: [] }));
+      return;
+    }
+
+    const Database = getDatabase(nanoclawPath);
+    const db = new Database(DB_PATH, { readonly: true }) as {
+      prepare: (sql: string) => { all: (...args: unknown[]) => unknown[]; get: (...args: unknown[]) => unknown };
+      close: () => void;
+    };
+
+    // Fetch all registered groups
+    const registeredGroups = db.prepare(
+      'SELECT folder, name, jid, container_config FROM registered_groups ORDER BY folder'
+    ).all() as Array<{ folder: string; name: string; jid: string; container_config: string | null }>;
+
+    const GROUPS_DIR = path.join(nanoclawPath, 'groups');
+
+    const groups = registeredGroups.map((rg) => {
+      // Determine triggerType
+      let triggerType: 'message' | 'scheduled' | 'none';
+      if (rg.jid.startsWith('scheduled:')) {
+        triggerType = 'scheduled';
+      } else if (rg.jid.includes(':')) {
+        triggerType = 'message';
+      } else {
+        triggerType = 'none';
+      }
+
+      // Parse outputJid from container_config
+      let outputJid: string | null = null;
+      try {
+        if (rg.container_config) {
+          const cfg = JSON.parse(rg.container_config) as { outputJid?: string };
+          outputJid = cfg.outputJid ?? null;
+        }
+      } catch { /* ignore */ }
+
+      // Fetch active scheduled tasks for this group
+      const taskRows = db.prepare(
+        `SELECT id, prompt, schedule_value, next_run, last_run FROM scheduled_tasks
+         WHERE group_folder = ? AND status = 'active'`
+      ).all(rg.folder) as Array<{
+        id: string;
+        prompt: string;
+        schedule_value: string;
+        next_run: string | null;
+        last_run: string | null;
+      }>;
+
+      const tasks = taskRows.map((t) => {
+        // Get most recent log entry for this task
+        const logRow = db.prepare(
+          `SELECT status, result FROM task_run_logs WHERE task_id = ? ORDER BY run_at DESC LIMIT 1`
+        ).get(t.id) as { status: string; result: string | null } | undefined;
+
+        return {
+          id: t.id,
+          label: t.prompt.slice(0, 60),
+          schedule: t.schedule_value,
+          nextRun: t.next_run ?? null,
+          lastRun: t.last_run ?? null,
+          lastStatus: logRow?.status ?? null,
+          lastResult: logRow?.result ? logRow.result.slice(0, 120) : null,
+        };
+      });
+
+      // Build warnings
+      const warnings: string[] = [];
+      const folderPath = path.join(GROUPS_DIR, rg.folder);
+      if (!fs.existsSync(folderPath)) {
+        warnings.push('Folder missing on disk');
+      }
+      if (tasks.length === 0 && triggerType !== 'message') {
+        warnings.push('No tasks and no message trigger');
+      }
+
+      return {
+        folder: rg.folder,
+        name: rg.name,
+        jid: rg.jid,
+        triggerType,
+        outputJid,
+        tasks,
+        warnings,
+      };
+    });
+
+    // Sort alphabetically by folder
+    groups.sort((a, b) => a.folder.localeCompare(b.folder));
+
+    db.close();
+
+    res.writeHead(200);
+    res.end(JSON.stringify({ groups }));
+  } catch (err) {
+    res.writeHead(500);
+    res.end(JSON.stringify({ error: String(err) }));
+  }
 }
 
 // ── Schedule registration ─────────────────────────────────────────────────────
@@ -1186,7 +1574,13 @@ function generateClaudeMd(
     switch (d.toolType) {
       case 'bash': {
         const cmd = String(d.config ?? '').trim();
-        capLines.push(`- Run shell commands${cmd ? `: \`${cmd.split('\n')[0]}\`` : ''}`);
+        const label = String(d.label ?? 'Bash tool');
+        if (cmd) {
+          // Write the full script so the agent runs exactly this, not a self-invented version
+          capLines.push(`- **${label}** — run this exact script when you need price/data:\n\`\`\`bash\n${cmd}\n\`\`\``);
+        } else {
+          capLines.push(`- Run shell commands (${label})`);
+        }
         break;
       }
       case 'search':
@@ -1214,24 +1608,26 @@ function generateClaudeMd(
     capLines.push(`- Delegate to ${String(a.data.label ?? 'sub-agent')}`);
   }
 
-  // ── Trigger description ──
-  let triggerLine = '';
-  if (triggers.length > 0) {
-    const tr = triggers[0].data;
-    switch (tr.triggerType) {
-      case 'schedule':
-        triggerLine = `This agent runs automatically on a schedule (${String(tr.config || 'cron').trim()}).`;
-        break;
-      case 'webhook':
-        triggerLine = `This agent is triggered by an incoming webhook call.`;
-        break;
-      case 'manual':
-        triggerLine = `This agent is triggered manually.`;
-        break;
-      default:
-        triggerLine = `This agent responds to incoming messages.`;
+  // ── Trigger description (primary + additionalTriggers) ──
+  const triggerDescriptions: string[] = [];
+  for (const tr of triggers) {
+    const allEntries = [
+      { type: String(tr.data.triggerType || ''), config: String(tr.data.config || '') },
+      ...((tr.data.additionalTriggers as Array<{ triggerType: string; config: string }> | undefined) ?? [])
+        .map(t => ({ type: String(t.triggerType || ''), config: String(t.config || '') })),
+    ];
+    for (const e of allEntries) {
+      switch (e.type) {
+        case 'schedule': triggerDescriptions.push(`on a schedule (${e.config.trim() || 'cron'})`); break;
+        case 'webhook':  triggerDescriptions.push('when a webhook is called'); break;
+        case 'manual':   triggerDescriptions.push('manually'); break;
+        default:         triggerDescriptions.push('when a message is received'); break;
+      }
     }
   }
+  const triggerLine = triggerDescriptions.length > 0
+    ? `This agent runs ${triggerDescriptions.join(' and ')}.`
+    : '';
 
   const capsSection = capLines.length > 0
     ? `## What You Can Do\n\n${capLines.join('\n')}`
@@ -1358,7 +1754,9 @@ export function chatPlugin(): Plugin {
           return;
         }
 
-        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('X-Accel-Buffering', 'no');
 
         try {
           const body = JSON.parse(await readBody(req));
@@ -1369,14 +1767,18 @@ export function chatPlugin(): Plugin {
             model?: string;
           };
 
-          const result = await runChatWithTools(messages, graphState, confirmedCommands, model);
           res.writeHead(200);
-          res.end(JSON.stringify(result));
+
+          const result = await runChatWithTools(
+            messages, graphState, confirmedCommands, model,
+            (event) => { res.write(JSON.stringify(event) + '\n'); },
+          );
+          res.end(JSON.stringify({ type: 'result', ...result }) + '\n');
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error('[chat-plugin]', msg);
-          res.writeHead(500);
-          res.end(JSON.stringify({ error: msg }));
+          if (!res.headersSent) res.writeHead(500);
+          res.end(JSON.stringify({ type: 'error', error: msg }) + '\n');
         }
       });
 
@@ -1399,6 +1801,17 @@ export function chatPlugin(): Plugin {
         });
       });
 
+      // Status panel API
+      server.middlewares.use('/api/status', (req: IncomingMessage, res: ServerResponse) => {
+        handleStatus(req, res).catch((err) => {
+          console.error('[status-api]', err);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end(JSON.stringify({ error: String(err) }));
+          }
+        });
+      });
+
       // Groups filesystem API
       server.middlewares.use('/api/groups', (req: IncomingMessage, res: ServerResponse) => {
         handleGroups(req, res).catch((err) => {
@@ -1408,6 +1821,36 @@ export function chatPlugin(): Plugin {
             res.end(JSON.stringify({ error: String(err) }));
           }
         });
+      });
+
+      // Templates API
+      server.middlewares.use('/api/templates', (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+        res.setHeader('Content-Type', 'application/json');
+        try {
+          const templatesDir = path.resolve(process.cwd(), 'templates');
+          if (!fs.existsSync(templatesDir)) {
+            res.writeHead(200); res.end(JSON.stringify({ templates: [] })); return;
+          }
+          const files = fs.readdirSync(templatesDir).filter(f => f.endsWith('.json'));
+          const templates = files.map(f => {
+            try {
+              const content = JSON.parse(fs.readFileSync(path.join(templatesDir, f), 'utf-8'));
+              return {
+                id: f.replace('.json', ''),
+                name: content.name ?? f,
+                description: content.description ?? '',
+                nodeCount: (content.nodes ?? []).length,
+                blueprint: content,
+              };
+            } catch { return null; }
+          }).filter(Boolean);
+          res.writeHead(200);
+          res.end(JSON.stringify({ templates }));
+        } catch (err) {
+          res.writeHead(500);
+          res.end(JSON.stringify({ error: String(err) }));
+        }
       });
 
       // Backup API
