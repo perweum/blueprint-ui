@@ -1,6 +1,7 @@
 export type NodeKind =
   | 'agent' | 'tool' | 'router' | 'output'
-  | 'trigger' | 'condition' | 'transform' | 'memory' | 'file' | 'comment';
+  | 'trigger' | 'condition' | 'transform' | 'memory' | 'file' | 'comment'
+  | 'swimlane';
 
 export type AgentModel =
   | 'claude-opus-4-6'
@@ -8,13 +9,24 @@ export type AgentModel =
   | 'claude-haiku-4-5-20251001';
 
 export type ToolType = 'bash' | 'search' | 'mcp';
-export type OutputDestination = 'telegram' | 'file' | 'webhook';
+export type OutputDestination = 'telegram' | 'file' | 'webhook' | 'agent_handoff';
 export type TriggerType = 'message' | 'schedule' | 'webhook' | 'manual';
 export type ConditionType = 'contains' | 'regex' | 'equals' | 'always_true';
 export type TransformType = 'template' | 'truncate' | 'json_wrap' | 'extract';
 export type MemoryOperation = 'read' | 'write' | 'both';
 export type MemoryScope = 'group' | 'global';
 export type FilePermission = 'read' | 'readwrite';
+
+export interface AdditionalMount {
+  hostPath: string;
+  containerPath: string;
+  readonly: boolean;
+}
+
+export interface ContainerConfig {
+  additionalMounts?: AdditionalMount[];
+  outputJid?: string; // preserved on every save — never overwrite
+}
 
 export interface AgentNodeData extends Record<string, unknown> {
   kind: 'agent'; label: string; model: AgentModel; systemPrompt: string;
@@ -27,6 +39,7 @@ export interface RouterNodeData extends Record<string, unknown> {
 }
 export interface OutputNodeData extends Record<string, unknown> {
   kind: 'output'; label: string; destination: OutputDestination; config: string;
+  targetFolder?: string; handoffMessage?: string;
 }
 export interface TriggerEntry {
   triggerType: TriggerType;
@@ -51,11 +64,14 @@ export interface FileNodeData extends Record<string, unknown> {
 export interface CommentNodeData extends Record<string, unknown> {
   kind: 'comment'; text: string; color: string;
 }
+export interface SwimlaneNodeData extends Record<string, unknown> {
+  kind: 'swimlane'; label: string; groupFolder: string; width: number; height: number;
+}
 
 export type BlueprintNodeData =
   | AgentNodeData | ToolNodeData | RouterNodeData | OutputNodeData
   | TriggerNodeData | ConditionNodeData | TransformNodeData
-  | MemoryNodeData | FileNodeData | CommentNodeData;
+  | MemoryNodeData | FileNodeData | CommentNodeData | SwimlaneNodeData;
 
 export interface AgentPreset {
   label: string; model: AgentModel; systemPrompt: string;
@@ -159,6 +175,7 @@ export const NODE_KIND_META: Record<NodeKind, { label: string; description: stri
   transform: { label: 'Transform', description: 'Format, template, or reshape text', color: '#14b8a6' },
   memory:    { label: 'Memory',    description: 'Read/write persistent group memory', color: '#06b6d4' },
   file:      { label: 'File',      description: 'Provide filesystem access to agents', color: '#84cc16' },
-  output:    { label: 'Output',    description: 'Send results to Telegram, file, or webhook', color: '#10b981' },
+  output:    { label: 'Output',    description: 'Send results to Telegram, file, webhook, or another bot', color: '#10b981' },
   comment:   { label: 'Comment',   description: 'Documentation label on the canvas', color: '#4b5563' },
+  swimlane:  { label: 'Bot Container', description: 'Groups nodes into a separate bot pipeline', color: '#6366f1' },
 };

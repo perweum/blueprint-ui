@@ -237,7 +237,10 @@ const SYSTEM = `You are an AI assistant embedded in Claw Studio — a visual nod
 
 **agent** — The AI brain that thinks and decides
 - label, model (claude-opus-4-6 | claude-sonnet-4-6 | claude-haiku-4-5-20251001), systemPrompt
-- Use Opus for complex reasoning, Sonnet for general work, Haiku for fast/cheap tasks
+- Model cost guidance (this matters — scheduled bots run every day):
+  - **Haiku**: ~20x cheaper than Opus. Use for ANY scheduled bot that does simple work: price checks, email digests, weather, news, reminders. DEFAULT choice for scheduled tasks.
+  - **Sonnet**: Use for bots that write code, analyse complex content, or need nuanced judgment. Good default for message-triggered bots.
+  - **Opus**: Most expensive. Only for genuinely complex one-off reasoning. Never for scheduled bots.
 - Write detailed, specific system prompts — they define the agent's personality and behavior
 - One pipeline can have multiple agents; extras become sub-agents the primary can delegate to
 
@@ -300,10 +303,11 @@ const SYSTEM = `You are an AI assistant embedded in Claw Studio — a visual nod
 - Use file nodes when the agent needs to read a config file, write a report, or maintain a local database
 
 **output** — Send the pipeline result somewhere
-- label, destination (telegram | file | webhook), config
+- label, destination (telegram | file | webhook | agent_handoff), config
 - telegram: sends the result as a Telegram message to the registered chat; no config needed
 - file: saves the result to a file; config is the file path (e.g. /workspace/report.md)
 - webhook: POSTs the result to a URL; config is the full URL (e.g. https://hooks.zapier.com/...)
+- agent_handoff: passes the result to another bot; set targetFolder (the bot's folder name) and optionally handoffMessage (use {{input}} as placeholder for the output). Use this to chain bots together — e.g. coordinator → coder → reviewer pipelines.
 - Always include an output node — without one the bot runs silently with no visible result
 - Telegram output requires the bot to be registered with a Telegram channel in nanoclaw
 
@@ -559,6 +563,7 @@ Operation types:
 - {"op": "addNode", "tempId": "t9", "kind": "output", "label": "...", "destination": "telegram", "config": "", "x": 200, "y": 740}
 - {"op": "addNode", "tempId": "t9b", "kind": "output", "label": "...", "destination": "file", "config": "/workspace/report.md", "x": 200, "y": 740}
 - {"op": "addNode", "tempId": "t9c", "kind": "output", "label": "...", "destination": "webhook", "config": "https://hooks.zapier.com/hooks/catch/...", "x": 200, "y": 740}
+- {"op": "addNode", "tempId": "t9d", "kind": "output", "label": "Pass to Reviewer", "destination": "agent_handoff", "targetFolder": "coding_reviewer", "handoffMessage": "Review this: {{input}}", "x": 200, "y": 740}
 - {"op": "addNode", "tempId": "t10", "kind": "comment", "text": "...", "color": "#4b5563", "x": 400, "y": 80}
 - {"op": "connect", "from": "t1", "to": "t2"}
 - {"op": "connect", "from": "t4", "to": "t5", "handle": "true"}
@@ -569,6 +574,18 @@ Operation types:
 - {"op": "deleteNode", "id": "node-5"}
 
 For pure questions with no canvas changes, set "operations" to [].
+
+## Reliability — Always Include in Agent System Prompts
+
+When writing the systemPrompt for any agent node, always include these instructions naturally as part of the bot's behaviour description:
+
+1. **Scheduled bots**: Tell the agent to send a brief "Starting..." acknowledgement (via send_message) as its first action every run. This confirms it's running. Without this, a silent failure looks identical to a bot that was never triggered.
+
+2. **Bots using external services** (Gmail, web requests, APIs, bash scripts): Tell the agent that if a tool fails, it should send a short error message and stop — not retry endlessly. Retrying a broken tool 20 times costs as much as 20 runs.
+
+3. **Bots that process items in bulk** (emails, files, search results): Give the agent a sensible upper limit (e.g. "process at most 30 emails per run"). Without a limit, a large inbox can keep the agent busy for 30+ minutes and cost many dollars.
+
+These are not optional extras — they are what separates a bot that costs $0.01/day from one that costs $5/day.
 
 ## Setup & Installation Mode
 
@@ -863,6 +880,26 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
     return;
   }
 
+  // ── GET /api/groups/bots — list scheduled bots available as handoff targets ──
+  if (req.method === 'GET' && parts[0] === 'bots') {
+    try {
+      const nanoclawPath = detectNanoclawPath();
+      if (!nanoclawPath) { res.writeHead(503); res.end(JSON.stringify({ error: 'Nanoclaw not found' })); return; }
+      const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+      if (!fs.existsSync(DB_PATH)) { res.writeHead(200); res.end(JSON.stringify({ bots: [] })); return; }
+      const Database = getDatabase(nanoclawPath);
+      const db = new Database(DB_PATH, { readonly: true });
+      const rows = db.prepare("SELECT folder, name FROM registered_groups WHERE jid LIKE 'scheduled:%' ORDER BY name").all() as Array<{ folder: string; name: string }>;
+      db.close();
+      res.writeHead(200);
+      res.end(JSON.stringify({ bots: rows }));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+    return;
+  }
+
   // ── GET /api/groups/channels — list channels available as output targets ──
   if (req.method === 'GET' && parts[0] === 'channels') {
     try {
@@ -1085,6 +1122,46 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
     }
   }
 
+  // ── /api/groups/:folder/settings ──────────────────────────────────────────
+  if (resource === 'settings') {
+    try {
+      const nanoclawPath = detectNanoclawPath();
+      if (!nanoclawPath) { res.writeHead(503); res.end(JSON.stringify({ error: 'Nanoclaw not found' })); return; }
+      const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+      if (!fs.existsSync(DB_PATH)) { res.writeHead(404); res.end(JSON.stringify({ error: 'Database not found' })); return; }
+      const DbCtor = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+      const db = new DbCtor(DB_PATH);
+
+      if (req.method === 'GET') {
+        const row = db.prepare('SELECT container_config FROM registered_groups WHERE folder = ?').get(folder) as { container_config: string | null } | undefined;
+        db.close();
+        if (!row) { res.writeHead(404); res.end(JSON.stringify({ error: 'Bot not registered' })); return; }
+        const config = JSON.parse(row.container_config || '{}');
+        res.writeHead(200);
+        res.end(JSON.stringify({ additionalMounts: config.additionalMounts ?? [] }));
+        return;
+      }
+
+      if (req.method === 'PUT') {
+        const body = JSON.parse(await readBody(req));
+        const row = db.prepare('SELECT container_config FROM registered_groups WHERE folder = ?').get(folder) as { container_config: string | null } | undefined;
+        if (!row) { db.close(); res.writeHead(404); res.end(JSON.stringify({ error: 'Bot not registered' })); return; }
+        // Read-then-merge: preserve outputJid and any other existing fields
+        const existing = JSON.parse(row.container_config || '{}');
+        const merged = { ...existing, additionalMounts: body.additionalMounts ?? [] };
+        db.prepare('UPDATE registered_groups SET container_config = ? WHERE folder = ?').run(JSON.stringify(merged), folder);
+        db.close();
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+    return;
+  }
+
   // ── /api/groups/:folder/claude-md ─────────────────────────────────────────
   if (resource === 'claude-md') {
     const claudePath = path.join(groupDir, 'CLAUDE.md');
@@ -1125,33 +1202,67 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
 
     try {
       const body = JSON.parse(await readBody(req));
-      const nodes: Array<{ type: string; data: Record<string, unknown> }> = body.nodes ?? [];
+      const allNodes: DeployNode[] = body.nodes ?? [];
+      const swimlaneNodes = allNodes.filter(n => n.type === 'swimlane');
+      const partition = partitionBySwimlaneMembership(allNodes);
+      // Primary group: nodes outside all swimlanes (or all nodes if no swimlanes)
+      const primaryNodes = swimlaneNodes.length > 0 ? (partition.get(null) ?? []) : allNodes.filter(n => n.type !== 'swimlane');
 
+      const nodes = primaryNodes;
       const agents   = nodes.filter(n => n.type === 'agent');
       const tools    = nodes.filter(n => n.type === 'tool');
       const triggers = nodes.filter(n => n.type === 'trigger');
       const outputs  = nodes.filter(n => n.type === 'output');
 
-      if (agents.length === 0) {
+      // Require at least one agent either in primary group or in a swimlane
+      const totalAgents = allNodes.filter(n => n.type === 'agent').length;
+      if (totalAgents === 0) {
         res.writeHead(400);
         res.end(JSON.stringify({ error: 'Blueprint must have at least one Agent node to deploy.' }));
         return;
       }
 
-      const content = generateClaudeMd(folder, agents, tools, triggers);
-
-      if (!fs.existsSync(groupDir)) fs.mkdirSync(groupDir, { recursive: true });
-      fs.writeFileSync(claudePath, content, 'utf-8');
+      let content = '';
+      if (agents.length > 0) {
+        content = generateClaudeMd(folder, agents, tools, triggers, outputs);
+          if (!fs.existsSync(groupDir)) fs.mkdirSync(groupDir, { recursive: true });
+        fs.writeFileSync(claudePath, content, 'utf-8');
+      }
 
       // ── Track what was done vs what needs manual steps ──
-      const done: string[] = [`CLAUDE.md written to groups/${folder}/CLAUDE.md`];
+      const done: string[] = agents.length > 0 ? [`CLAUDE.md written to groups/${folder}/CLAUDE.md`] : [];
       const manual: string[] = [];
 
-      if (triggers.length === 0) {
+      if (agents.length > 0 && triggers.length === 0) {
         manual.push('No trigger node — add a Trigger node so the bot knows when to run');
       }
-      if (outputs.length === 0) {
+      if (agents.length > 0 && outputs.length === 0) {
         manual.push('No output node — add an Output node so the bot can send messages somewhere');
+      }
+
+      // ── Check agent_handoff targets are registered ──
+      for (const out of outputs) {
+        if (out.data.destination === 'agent_handoff') {
+          const targetFolder = String(out.data.targetFolder || '').trim();
+          if (!targetFolder) {
+            manual.push('Agent handoff output — choose a target bot in the Output node settings');
+          } else {
+            try {
+              const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+              if (fs.existsSync(DB_PATH)) {
+                const DbCtor = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+                const db = new DbCtor(DB_PATH, { readonly: true });
+                const row = db.prepare("SELECT name FROM registered_groups WHERE folder = ?").get(targetFolder) as { name: string } | undefined;
+                db.close();
+                if (!row) {
+                  manual.push(`Handoff target "${targetFolder}" is not registered in nanoclaw yet — deploy that bot first`);
+                } else {
+                  done.push(`Handoff to "${row.name}" configured`);
+                }
+              }
+            } catch { /* non-fatal */ }
+          }
+        }
       }
 
       // ── Collect all trigger entries (primary + additionalTriggers) ──
@@ -1284,6 +1395,55 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
         }
       }
       void gmailAuthorized; // suppress unused warning
+
+      // ── Deploy swimlane (sub-bot) groups ──────────────────────────────────
+      for (const sl of swimlaneNodes) {
+        const slFolder = String(sl.data.groupFolder || 'bot').trim();
+        if (!slFolder) continue;
+        const slLabel = String(sl.data.label ?? slFolder);
+        const slNodes = partition.get(slFolder) ?? [];
+        const slAgents   = slNodes.filter(n => n.type === 'agent');
+        if (slAgents.length === 0) continue;
+        const slTools    = slNodes.filter(n => n.type === 'tool');
+        const slTriggers = slNodes.filter(n => n.type === 'trigger');
+        const slOutputs  = slNodes.filter(n => n.type === 'output');
+
+        const slContent  = generateClaudeMd(slFolder, slAgents, slTools, slTriggers, slOutputs);
+        const slDir      = path.join(nanoclawPath, 'groups', slFolder);
+        const slPath     = path.join(slDir, 'CLAUDE.md');
+        if (!fs.existsSync(slDir)) fs.mkdirSync(slDir, { recursive: true });
+        fs.writeFileSync(slPath, slContent, 'utf-8');
+        done.push(`[${slLabel}] CLAUDE.md written to groups/${slFolder}/CLAUDE.md`);
+
+        try {
+          const DB_PATH = path.join(nanoclawPath, 'store', 'messages.db');
+          if (fs.existsSync(DB_PATH)) {
+            const DbCtor = _require(path.join(nanoclawPath, 'node_modules', 'better-sqlite3'));
+            const db = new DbCtor(DB_PATH);
+            const existing = db.prepare('SELECT folder FROM registered_groups WHERE folder = ?').get(slFolder);
+            if (!existing) {
+              db.prepare('INSERT OR IGNORE INTO registered_groups (jid, folder, name, added_at) VALUES (?, ?, ?, ?)')
+                .run(`scheduled:${slFolder}`, slFolder, slLabel, new Date().toISOString());
+              done.push(`[${slLabel}] Registered as new bot (scheduled:${slFolder})`);
+            }
+            // Register schedule triggers for this swimlane bot
+            const slSchedules = slTriggers.flatMap(tr => {
+              const entries = [{ type: String(tr.data.triggerType || ''), config: String(tr.data.config || '') }];
+              const additional = (tr.data.additionalTriggers as Array<{ triggerType: string; config: string }> | undefined) ?? [];
+              return [...entries, ...additional.map(a => ({ type: String(a.triggerType || ''), config: String(a.config || '') }))];
+            }).filter(e => e.type === 'schedule' && e.config.trim());
+            for (const e of slSchedules) {
+              const registered = tryRegisterSchedule(slFolder, e.config.trim(), slLabel);
+              if (registered) {
+                done.push(`[${slLabel}] Schedule registered: "${e.config.trim()}"`);
+              } else {
+                manual.push(`[${slLabel}] Schedule "${e.config.trim()}" — set an output channel for ${slLabel} to activate`);
+              }
+            }
+            db.close();
+          }
+        } catch { /* non-fatal */ }
+      }
 
       res.writeHead(200);
       res.end(JSON.stringify({ ok: true, preview: content, actions: { done, manual } }));
@@ -1560,11 +1720,50 @@ const MCP_SERVICE_NAMES: Record<string, string> = {
   'newsapi-mcp':          'News headlines via NewsAPI',
 };
 
+// ── Swimlane partition ────────────────────────────────────────────────────────
+
+type DeployNode = {
+  id: string;
+  type: string;
+  position: { x: number; y: number };
+  style?: { width?: number | string; height?: number | string };
+  data: Record<string, unknown>;
+};
+
+function partitionBySwimlaneMembership(nodes: DeployNode[]): Map<string | null, DeployNode[]> {
+  const swimlanes = nodes.filter(n => n.type === 'swimlane');
+  const result = new Map<string | null, DeployNode[]>();
+  result.set(null, []);
+  for (const sl of swimlanes) {
+    result.set(String(sl.data.groupFolder || 'bot'), []);
+  }
+  for (const node of nodes) {
+    if (node.type === 'swimlane') continue;
+    let assigned = false;
+    for (const sl of swimlanes) {
+      const slFolder = String(sl.data.groupFolder || 'bot');
+      const slX = sl.position.x;
+      const slY = sl.position.y;
+      const slW = Number(sl.style?.width ?? sl.data.width ?? 640);
+      const slH = Number(sl.style?.height ?? sl.data.height ?? 420);
+      if (node.position.x >= slX && node.position.x <= slX + slW &&
+          node.position.y >= slY && node.position.y <= slY + slH) {
+        result.get(slFolder)!.push(node);
+        assigned = true;
+        break;
+      }
+    }
+    if (!assigned) result.get(null)!.push(node);
+  }
+  return result;
+}
+
 function generateClaudeMd(
   folder: string,
   agents: Array<{ data: Record<string, unknown> }>,
   tools:  Array<{ data: Record<string, unknown> }>,
   triggers: Array<{ data: Record<string, unknown> }>,
+  outputs: Array<{ data: Record<string, unknown> }> = [],
 ): string {
   const primary = agents[0].data;
   const name  = String(primary.label  ?? folder);
@@ -1640,6 +1839,48 @@ function generateClaudeMd(
     ? `## When You Run\n\n${triggerLine}`
     : '';
 
+  // ── Agent handoff section ──────────────────────────────────────────────────
+  const handoffOutput = outputs.find(o => o.data.destination === 'agent_handoff');
+  let handoffSection = '';
+  if (handoffOutput) {
+    const targetFolder = String(handoffOutput.data.targetFolder || '').trim();
+    const handoffMessage = String(handoffOutput.data.handoffMessage || '').trim();
+    if (targetFolder) {
+      const botName = targetFolder.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+      const promptTemplate = handoffMessage
+        ? handoffMessage.replace('{{input}}', 'your complete output')
+        : 'your complete output';
+      handoffSection = [
+        '## Handoff',
+        '',
+        `When you finish, immediately trigger the *${botName}* bot using the \`mcp__nanoclaw__schedule_task\` tool:`,
+        '',
+        '```',
+        'schedule_type: "once"',
+        `schedule_value: [current UTC time + 5 seconds, ISO 8601 format]`,
+        `target_group_jid: "scheduled:${targetFolder}"`,
+        `prompt: "${promptTemplate}"`,
+        'context_mode: "isolated"',
+        '```',
+        '',
+        `Replace the prompt with the actual content: ${handoffMessage ? `"${handoffMessage.replace('{{input}}', '[your full output here]')}"` : 'your full output text'}.`,
+      ].join('\n');
+    }
+  }
+
+  // ── Guardrails: always injected when there are external tools or a schedule ──
+  const isScheduled = triggerDescriptions.some(t => t.includes('schedule'));
+  const hasExternalTools = tools.some(t => t.data.toolType === 'mcp' || t.data.toolType === 'bash' || t.data.toolType === 'search');
+  const guardrailLines: string[] = [];
+  if (isScheduled) {
+    guardrailLines.push('**First action every run**: call `mcp__nanoclaw__send_message` with a brief "Starting..." message before doing any work. This confirms the bot is actually running.');
+  }
+  if (hasExternalTools) {
+    guardrailLines.push('**If any external tool fails**: send an error message via `mcp__nanoclaw__send_message` and stop immediately — do not retry more than once.');
+  }
+  guardrailLines.push('**Never loop or spin**: if you cannot complete the task within a reasonable number of steps, send a brief failure message and stop.');
+  const guardrailsSection = `## Guardrails\n\n${guardrailLines.join('\n')}`;
+
   const BOILERPLATE = [
     '## Communication',
     '',
@@ -1681,6 +1922,9 @@ function generateClaudeMd(
   parts.push(prompt);
   if (capsSection) { parts.push(''); parts.push(capsSection); }
   if (triggerSection) { parts.push(''); parts.push(triggerSection); }
+  if (handoffSection) { parts.push(''); parts.push(handoffSection); }
+  parts.push('');
+  parts.push(guardrailsSection);
   parts.push('');
   parts.push(BOILERPLATE);
 

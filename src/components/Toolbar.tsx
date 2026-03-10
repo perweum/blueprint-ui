@@ -211,6 +211,9 @@ export function Toolbar({ onOpenPalette, onOpenGroupPicker, onNewBot, onOpenStat
               + {NODE_KIND_META[kind].label}
             </button>
           ))}
+          <button className="toolbar__btn btn-swimlane" onClick={() => addNode('swimlane')} title="Add a bot container (swimlane)">
+            + Bot
+          </button>
           <button className="toolbar__btn btn-secondary toolbar__btn--palette" onClick={onOpenPalette} title="Command palette (⌘K)">
             ⌘K
           </button>

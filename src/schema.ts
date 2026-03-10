@@ -7,7 +7,7 @@ import { z } from 'zod';
 export const AddNodeOp = z.object({
   op: z.literal('addNode'),
   tempId: z.string().describe('Temporary ID used to reference this node in connect ops'),
-  kind: z.enum(['agent', 'tool', 'router', 'output', 'trigger', 'condition', 'transform', 'memory', 'file', 'comment']),
+  kind: z.enum(['agent', 'tool', 'router', 'output', 'trigger', 'condition', 'transform', 'memory', 'file', 'comment', 'swimlane']),
   label: z.string(),
   // agent
   model: z.enum(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001']).optional(),
@@ -19,7 +19,9 @@ export const AddNodeOp = z.object({
   routingPrompt: z.string().optional(),
   branches: z.array(z.string()).optional(),
   // output
-  destination: z.enum(['telegram', 'file', 'webhook']).optional(),
+  destination: z.enum(['telegram', 'file', 'webhook', 'agent_handoff']).optional(),
+  targetFolder: z.string().optional(),
+  handoffMessage: z.string().optional(),
   // trigger
   triggerType: z.enum(['message', 'schedule', 'webhook', 'manual']).optional(),
   // condition
@@ -37,6 +39,10 @@ export const AddNodeOp = z.object({
   // comment
   text: z.string().optional(),
   color: z.string().optional(),
+  // swimlane
+  groupFolder: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
   // position
   x: z.number(),
   y: z.number(),

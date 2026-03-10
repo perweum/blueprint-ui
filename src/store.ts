@@ -100,6 +100,8 @@ function defaultData(kind: NodeKind): BlueprintNodeData {
       return { kind: 'file', label: 'File Access', path: '/workspace', permissions: 'read' };
     case 'comment':
       return { kind: 'comment', text: 'Comment', color: '#4b5563' };
+    case 'swimlane':
+      return { kind: 'swimlane', label: 'Bot Container', groupFolder: 'bot_container', width: 640, height: 420 };
   }
 }
 
@@ -282,7 +284,8 @@ export const useStore = create<BlueprintStore>((set, get) => ({
 
   addNode: (kind, position = { x: 200 + Math.random() * 200, y: 150 + Math.random() * 200 }) => {
     const id = nextId();
-    const node: Node<BlueprintNodeData> = { id, type: kind, position, data: defaultData(kind) };
+    const extra = kind === 'swimlane' ? { style: { width: 640, height: 420 }, zIndex: -1 } : {};
+    const node: Node<BlueprintNodeData> = { id, type: kind, position, data: defaultData(kind), ...extra };
     set((s) => ({
       ...withHistoryPush(s),
       nodes: [...s.nodes, node],
@@ -746,6 +749,8 @@ function buildNodeDataFromOp(op: Extract<import('./schema').Operation, { op: 'ad
       return { kind: 'file', label: op.label, path: op.path ?? '/workspace', permissions: (op.permissions ?? 'read') as import('./types').FilePermission };
     case 'comment':
       return { kind: 'comment', text: op.text ?? '', color: op.color ?? '#4b5563' };
+    case 'swimlane':
+      return { kind: 'swimlane', label: op.label, groupFolder: op.groupFolder ?? 'bot_container', width: op.width ?? 640, height: op.height ?? 420 };
   }
 }
 
@@ -764,6 +769,7 @@ function buildGraphSummary(nodes: Node<BlueprintNodeData>[], edges: Edge[]): str
     if (d.kind === 'transform') detail = ` [${d.transformType}]`;
     if (d.kind === 'memory') detail = ` [${d.operation} ${d.scope}]`;
     if (d.kind === 'file') detail = ` [${d.permissions}: ${d.path}]`;
+    if (d.kind === 'swimlane') return `- ${n.id}: swimlane "${d.label}" (bot: ${d.groupFolder})`;
     if (d.kind === 'comment') return `- ${n.id}: comment "${d.text}"`;
     return `- ${n.id}: ${d.kind} "${d.label}"${detail}`;
   });

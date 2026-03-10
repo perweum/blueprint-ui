@@ -5,6 +5,7 @@ import { FileNode } from './FileNode';
 import { MemoryNode } from './MemoryNode';
 import { OutputNode } from './OutputNode';
 import { RouterNode } from './RouterNode';
+import { SwimlaneNode } from './SwimlaneNode';
 import { ToolNode } from './ToolNode';
 import { TransformNode } from './TransformNode';
 import { TriggerNode } from './TriggerNode';
@@ -20,4 +21,5 @@ export const nodeTypes = {
   memory: MemoryNode,
   file: FileNode,
   comment: CommentNode,
+  swimlane: SwimlaneNode,
 };

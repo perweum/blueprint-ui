@@ -30,7 +30,11 @@ Claw Studio lets you design, configure, and deploy personal AI bots using a drag
 - **Visual pipeline editor** — drag-and-drop canvas powered by [React Flow](https://reactflow.dev), with minimap and keyboard shortcuts
 - **AI chat assistant** — describe what you want in plain English; the assistant builds or edits nodes for you using Claude
 - **Guided option prompts** — the assistant presents clickable choices when it needs your input, so you never have to guess what to type
-- **10 node types** — Trigger, Agent, Tool (Bash + MCP), Memory, Transform, Condition, Router, Output, File, Comment
+- **11 node types** — Trigger, Agent, Tool (Bash + MCP), Memory, Transform, Condition, Router, Output, File, Comment, Bot Container
+- **Bot swarms (swimlanes)** — add a **Bot Container** to your canvas to define sub-bots; deploy writes a separate `CLAUDE.md` and registers each container as its own bot, all from one blueprint
+- **Pass to another bot** — Output node supports "Pass to another bot" as a destination, generating handoff instructions so the primary bot automatically triggers a sub-bot when it finishes
+- **Bot settings** — configure file mounts per bot from the `···` menu in the bot picker, giving bots read or read/write access to folders on your machine
+- **Fail-fast guardrails** — every deployed bot gets built-in guardrails in its `CLAUDE.md`: send an early acknowledgement, fail fast instead of looping, cap retries
 - **Multi-trigger nodes** — one trigger node can combine a schedule *and* a message trigger (e.g. "run every morning, but also on demand")
 - **Channel-aware AI** — the assistant reads your connected channels and automatically suggests the right output destination
 - **Run now button** — trigger any scheduled bot immediately, without waiting for its next cron tick
@@ -151,9 +155,10 @@ Use the toolbar buttons or `Cmd/Ctrl+K` to open the command palette and add node
 | **Transform** | Formats, truncates, or extracts data |
 | **Condition** | Branches the pipeline based on a true/false check |
 | **Router** | Sends output to different paths based on content |
-| **Output** | Sends a message, saves to a file, or POSTs to a webhook URL |
+| **Output** | Sends a message, saves to a file, POSTs to a webhook, or **passes to another bot** |
 | **File** | Reads or writes a file in the group's workspace |
 | **Comment** | Adds a note to the canvas (not deployed) |
+| **Bot Container** | Groups nodes into a separate bot pipeline — deploy generates a `CLAUDE.md` for each container |
 
 > **How logic nodes work:** Condition, Router, Transform, Memory, and File nodes add instructions to your agent's system prompt — they're not runtime middleware that automatically intercepts output. The agent reads all instructions and decides how to apply them when it runs.
 
@@ -165,6 +170,35 @@ A single Trigger node can combine multiple trigger types. For example, a bot tha
 2. Click **+ Add another trigger** and choose **When a message is received**
 
 This is the recommended approach — do not create two separate Trigger nodes.
+
+### Bot swarms (multi-bot pipelines)
+
+Use **Bot Container** nodes to build pipelines where multiple independent bots collaborate.
+
+**How it works:**
+1. Click **+ Bot** in the toolbar to add a Bot Container to the canvas
+2. Rename the container in the settings panel on the right (e.g. "Code Reviewer") — the folder name is generated automatically
+3. Drag Agent, Tool, Trigger, and Output nodes **inside** the container — they belong to that bot
+4. Nodes **outside** all containers belong to the primary bot (your current blueprint)
+5. Click **⬆ Deploy** — Claw Studio writes a `CLAUDE.md` for each container and registers each as its own bot in nanoclaw
+
+To **pass results from one bot to another**, set an Output node's destination to **"Pass to another bot"** — this adds handoff instructions to the primary bot's `CLAUDE.md` so it automatically triggers the target bot when it finishes.
+
+> **Important:** Only the main channel bot can hand off to other bots. Sub-bots (in containers) can pass back to the coordinator but not to arbitrary third bots. This is a nanoclaw constraint, explained in the Output node's settings panel.
+
+### Bot settings (file access)
+
+To give a bot access to folders on your machine:
+
+1. Click the bot name button in the toolbar to open the bot picker
+2. Click the **···** button on the bot you want to configure
+3. Choose **Bot settings**
+4. Under **File access**, click **+ Add folder**
+5. Enter the host path (e.g. `/Users/per/my-project`) — the name inside the bot auto-fills
+6. Choose **Read only** or **Read and write**
+7. Click **Save settings**
+
+Changes take effect the next time the bot runs.
 
 ### Using the AI assistant
 

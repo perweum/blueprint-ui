@@ -1,5 +1,124 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore, type GroupInfo } from '../store';
+import type { AdditionalMount } from '../types';
+
+// ── Bot Settings Modal ────────────────────────────────────────────────────────
+
+function BotSettingsModal({ folder, onClose }: { folder: string; onClose: () => void }) {
+  const [mounts, setMounts] = useState<AdditionalMount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+
+  useEffect(() => {
+    fetch(`/api/groups/${folder}/settings`)
+      .then(r => r.json())
+      .then(({ additionalMounts }) => setMounts(additionalMounts ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [folder]);
+
+  function addMount() {
+    setMounts(m => [...m, { hostPath: '', containerPath: '', readonly: true }]);
+  }
+
+  function updateMount(i: number, patch: Partial<AdditionalMount>) {
+    setMounts(m => m.map((item, idx) => {
+      if (idx !== i) return item;
+      const updated = { ...item, ...patch };
+      // Auto-fill containerPath from last path segment when it hasn't been set yet
+      if ('hostPath' in patch && !item.containerPath) {
+        updated.containerPath = patch.hostPath!.split('/').filter(Boolean).pop() ?? '';
+      }
+      return updated;
+    }));
+  }
+
+  async function save() {
+    setSaveState('saving');
+    try {
+      await fetch(`/api/groups/${folder}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ additionalMounts: mounts.filter(m => m.hostPath.trim()) }),
+      });
+      setSaveState('saved');
+      setTimeout(() => setSaveState('idle'), 2000);
+    } catch {
+      setSaveState('idle');
+    }
+  }
+
+  return (
+    <div className="bot-settings-backdrop" onClick={onClose}>
+      <div className="bot-settings-modal" onClick={e => e.stopPropagation()}>
+        <div className="bot-settings-modal__header">
+          <span>Bot settings — {formatBotName(folder)}</span>
+          <button className="bot-settings-modal__close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="bot-settings-modal__body">
+          <div className="bot-settings__section-title">File access</div>
+          <p className="bot-settings__section-desc">
+            Give this bot access to folders on your computer. Useful for bots that need to read your code, documents, or projects.
+          </p>
+
+          {loading ? (
+            <div className="bot-settings__loading">Loading…</div>
+          ) : (
+            <>
+              {mounts.length > 0 && (
+                <div className="bot-settings__mount-header">
+                  <span>Folder on your computer</span>
+                  <span>Name inside bot</span>
+                  <span>Access</span>
+                  <span />
+                </div>
+              )}
+              {mounts.map((m, i) => (
+                <div key={i} className="bot-settings__mount-row">
+                  <input
+                    className="bot-settings__mount-input"
+                    value={m.hostPath}
+                    placeholder="/Users/you/my-project"
+                    onChange={e => updateMount(i, { hostPath: e.target.value })}
+                    spellCheck={false}
+                  />
+                  <input
+                    className="bot-settings__mount-input bot-settings__mount-input--short"
+                    value={m.containerPath}
+                    placeholder="my-project"
+                    onChange={e => updateMount(i, { containerPath: e.target.value })}
+                    spellCheck={false}
+                  />
+                  <select
+                    className="bot-settings__mount-select"
+                    value={m.readonly ? 'readonly' : 'readwrite'}
+                    onChange={e => updateMount(i, { readonly: e.target.value === 'readonly' })}
+                  >
+                    <option value="readonly">Read only</option>
+                    <option value="readwrite">Read &amp; write</option>
+                  </select>
+                  <button className="bot-settings__mount-remove" onClick={() => setMounts(m2 => m2.filter((_, j) => j !== i))}>✕</button>
+                </div>
+              ))}
+
+              <button className="bot-settings__add-btn" onClick={addMount}>+ Add folder</button>
+              {mounts.length > 0 && (
+                <p className="bot-settings__hint">Changes take effect the next time this bot runs.</p>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="bot-settings-modal__footer">
+          <button className="bot-settings-modal__save" onClick={save} disabled={saveState === 'saving'}>
+            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? '✓ Saved' : 'Save settings'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const CHANNEL_LABELS: Record<string, { label: string; color: string }> = {
   telegram:  { label: 'Telegram',  color: '#2ca5e0' },
@@ -51,6 +170,23 @@ export function GroupPicker({ onClose, initialMode = 'list', onNewChannel }: Gro
   const [selectedChannelJid, setSelectedChannelJid] = useState('');
   const [pendingChannel, setPendingChannel] = useState<{ label: string; skillMsg: string } | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // ⋯ menu and settings modal state
+  const [menuFolder, setMenuFolder] = useState<string | null>(null);
+  const [settingsFolder, setSettingsFolder] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!menuFolder) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuFolder(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [menuFolder]);
 
   useEffect(() => {
     fetch('/api/groups')
@@ -137,32 +273,56 @@ export function GroupPicker({ onClose, initialMode = 'list', onNewChannel }: Gro
             {groups.map((g) => {
               const channel = detectChannel(g.folder);
               const isActive = g.folder === currentGroupFolder;
+              const isMenuOpen = menuFolder === g.folder;
               return (
-                <button
-                  key={g.folder}
-                  className={`palette__item group-picker__item ${isActive ? 'group-picker__item--active' : ''}`}
-                  onClick={() => pick(g.folder)}
-                >
-                  <div className="group-picker__item-main">
-                    <span className="group-picker__bot-name">{formatBotName(g.folder)}</span>
-                    <div className="group-picker__item-meta">
-                      {channel && (
-                        <span className="group-picker__channel-badge" style={{ background: channel.color + '22', color: channel.color, border: `1px solid ${channel.color}44` }}>
-                          {channel.label}
-                        </span>
-                      )}
-                      {!g.hasClaude && (
-                        <span className="group-picker__status-badge group-picker__status-badge--warn">no CLAUDE.md</span>
-                      )}
-                      {g.hasBlueprint && (
-                        <span className="group-picker__status-badge">blueprint</span>
-                      )}
+                <div key={g.folder} className="group-picker__item-wrap">
+                  <button
+                    className={`palette__item group-picker__item ${isActive ? 'group-picker__item--active' : ''}`}
+                    onClick={() => pick(g.folder)}
+                  >
+                    <div className="group-picker__item-main">
+                      <span className="group-picker__bot-name">{formatBotName(g.folder)}</span>
+                      <div className="group-picker__item-meta">
+                        {channel && (
+                          <span className="group-picker__channel-badge" style={{ background: channel.color + '22', color: channel.color, border: `1px solid ${channel.color}44` }}>
+                            {channel.label}
+                          </span>
+                        )}
+                        {!g.hasClaude && (
+                          <span className="group-picker__status-badge group-picker__status-badge--warn">no CLAUDE.md</span>
+                        )}
+                        {g.hasBlueprint && (
+                          <span className="group-picker__status-badge">blueprint</span>
+                        )}
+                      </div>
                     </div>
+                    {isActive && <span className="group-picker__current-badge">currently open</span>}
+                  </button>
+
+                  {/* ⋯ menu */}
+                  <div className="group-picker__item-menu" ref={isMenuOpen ? menuRef : undefined}>
+                    <button
+                      className="group-picker__menu-btn"
+                      title="Bot options"
+                      onClick={e => { e.stopPropagation(); setMenuFolder(isMenuOpen ? null : g.folder); }}
+                    >
+                      ···
+                    </button>
+                    {isMenuOpen && (
+                      <div className="group-picker__menu-dropdown">
+                        <button className="group-picker__menu-item" onClick={e => { e.stopPropagation(); setMenuFolder(null); setSettingsFolder(g.folder); }}>
+                          Bot settings
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  {isActive && <span className="group-picker__current-badge">currently open</span>}
-                </button>
+                </div>
               );
             })}
+
+            {settingsFolder && (
+              <BotSettingsModal folder={settingsFolder} onClose={() => setSettingsFolder(null)} />
+            )}
           </div>
         )}
 

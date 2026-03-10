@@ -18,11 +18,12 @@ const TOOL_TYPE_LABELS: Record<ToolType, string> = {
   search: 'Web search',
   mcp: 'Connect to a service (MCP)',
 };
-const DESTINATIONS: OutputDestination[] = ['telegram', 'file', 'webhook'];
+const DESTINATIONS: OutputDestination[] = ['telegram', 'file', 'webhook', 'agent_handoff'];
 const DESTINATION_LABELS: Record<OutputDestination, string> = {
   telegram: 'Telegram message',
   file: 'Save to file',
   webhook: 'Send to URL',
+  agent_handoff: 'Pass to another bot',
 };
 const TRIGGER_TYPES: TriggerType[] = ['message', 'schedule', 'webhook', 'manual'];
 const TRIGGER_LABELS: Record<TriggerType, string> = {
@@ -256,6 +257,7 @@ export function NodePanel() {
   // customCronSet tracks which trigger indices are in "custom cron" mode.
   // Index 0 = primary trigger, 1+ = additionalTriggers[i-1].
   const [customCronSet, setCustomCronSet] = useState<Set<number>>(new Set());
+  const [availableBots, setAvailableBots] = useState<Array<{ folder: string; name: string }>>([]);
 
   useEffect(() => {
     const d = node?.data as BlueprintNodeData | undefined;
@@ -269,6 +271,18 @@ export function NodePanel() {
     });
     setCustomCronSet(next);
   }, [selectedNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch registered bots when the output destination is agent_handoff
+  const isAgentHandoff = (node?.data as BlueprintNodeData | undefined)?.kind === 'output' &&
+    (node?.data as { destination?: string } | undefined)?.destination === 'agent_handoff';
+  useEffect(() => {
+    if (!isAgentHandoff) return;
+    fetch('/api/groups/bots')
+      .then(r => r.json())
+      .then(({ bots }) => setAvailableBots(bots ?? []))
+      .catch(() => setAvailableBots([]));
+  }, [isAgentHandoff]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const isOpen = !!node;
   const data = node?.data as BlueprintNodeData | undefined;
   const update = (patch: Partial<BlueprintNodeData>) => {
@@ -464,7 +478,7 @@ export function NodePanel() {
                 <option key={m} value={m}>{MODEL_LABELS[m]}</option>
               ))}
             </select>
-            <HelpText>Sonnet is the best starting point. Use Haiku for simple/fast tasks, Opus for complex reasoning.</HelpText>
+            <HelpText>Scheduled bots run every day — model choice matters. Use Haiku for scheduled tasks (price checks, emails, reminders) — ~20x cheaper than Opus. Use Sonnet for message-triggered bots or anything needing nuanced judgment. Avoid Opus for scheduled bots.</HelpText>
           </div>
           <div className="node-panel__field">
             <label>Instructions (system prompt)</label>
@@ -645,6 +659,39 @@ export function NodePanel() {
               The result will be sent as a Telegram message to the same chat that triggered this pipeline. No extra configuration needed.
             </div>
           )}
+          {data.destination === 'agent_handoff' && (
+            <>
+              <div className="node-panel__field">
+                <label>Which bot?</label>
+                <select
+                  value={data.targetFolder ?? ''}
+                  onChange={(e) => update({ targetFolder: e.target.value } as Partial<BlueprintNodeData>)}
+                >
+                  <option value="">— select a bot —</option>
+                  {availableBots.map(b => (
+                    <option key={b.folder} value={b.folder}>{b.name}</option>
+                  ))}
+                </select>
+                {availableBots.length === 0 && (
+                  <HelpText>No bots found. Deploy at least one other bot in nanoclaw first.</HelpText>
+                )}
+              </div>
+              <div className="node-panel__field">
+                <label>What to tell it <span style={{ fontWeight: 400, opacity: 0.6 }}>(optional)</span></label>
+                <textarea
+                  rows={3}
+                  value={data.handoffMessage ?? ''}
+                  placeholder="Handle this: {{input}}"
+                  onChange={(e) => update({ handoffMessage: e.target.value } as Partial<BlueprintNodeData>)}
+                />
+                <HelpText>{'Use {{input}} to include this agent\'s output. Leave blank to pass the full output automatically.'}</HelpText>
+              </div>
+              <div className="node-panel__field node-panel__field--info">
+                <span className="field-info-icon">ℹ</span>
+                The selected bot will be triggered immediately when this pipeline finishes. It must already be deployed in nanoclaw. Only the coordinator bot (your main channel) can pass to other bots.
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -798,6 +845,30 @@ export function NodePanel() {
                 <option key={p} value={p}>{p === 'read' ? 'Read only' : 'Read and write'}</option>
               ))}
             </select>
+          </div>
+        </>
+      )}
+
+      {/* ── Swimlane ── */}
+      {data.kind === 'swimlane' && (
+        <>
+          <div className="node-panel__field">
+            <label>Bot name</label>
+            <input
+              value={data.label}
+              placeholder="e.g. Code Reviewer"
+              onChange={(e) => {
+                const label = e.target.value;
+                const groupFolder = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'bot';
+                update({ label, groupFolder } as Partial<BlueprintNodeData>);
+              }}
+            />
+            <HelpText>The display name for this bot pipeline. Drag nodes inside to assign them to this bot.</HelpText>
+          </div>
+          <div className="node-panel__field">
+            <label>Bot folder</label>
+            <input value={data.groupFolder} readOnly style={{ opacity: 0.5, cursor: 'default' }} />
+            <HelpText>Auto-generated from bot name. Used when deploying.</HelpText>
           </div>
         </>
       )}
