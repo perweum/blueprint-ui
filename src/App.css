@@ -2469,3 +2469,22 @@ body {
   font-weight: 600;
   color: rgba(255, 255, 255, 0.75);
 }
+
+/* Swimlane connection handles — sit on the left/right of the header */
+.swimlane-node__handle.react-flow__handle {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-swimlane);
+  border: 2px solid #12121f;
+  opacity: 0.85;
+  pointer-events: all;
+}
+.swimlane-node__handle.react-flow__handle:hover { opacity: 1; transform: scale(1.2); }
+
+/* Cross-bot (inter-swimlane) edge label */
+.react-flow__edge-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}

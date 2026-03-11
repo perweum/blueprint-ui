@@ -1,4 +1,4 @@
-import { NodeResizer, type NodeProps } from '@xyflow/react';
+import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
 import type { SwimlaneNodeData } from '../types';
 
 function hashHue(str: string): number {
@@ -29,10 +29,24 @@ export function SwimlaneNode({ data, selected }: NodeProps) {
           height: '100%',
         }}
       >
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="in"
+          className="swimlane-node__handle"
+          style={{ top: 24 }}
+        />
         <div className="swimlane-node__header">
           <span className="swimlane-node__badge">BOT</span>
           <span className="swimlane-node__label">{d.label || 'Bot Container'}</span>
         </div>
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="out"
+          className="swimlane-node__handle"
+          style={{ top: 24 }}
+        />
       </div>
     </>
   );
