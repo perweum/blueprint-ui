@@ -104,7 +104,7 @@ function GroupCard({ group }: { group: StatusGroup }) {
         )}
       </div>
 
-      {group.tasks.map((task) => {
+      {(group.tasks ?? []).map((task) => {
         const expanded = expandedTasks.has(task.id);
         return (
           <div key={task.id} className="status-task">
@@ -138,11 +138,11 @@ function GroupCard({ group }: { group: StatusGroup }) {
         );
       })}
 
-      {group.warnings.map((w, i) => (
+      {(group.warnings ?? []).map((w, i) => (
         <div key={i} className="status-warn">⚠ {w}</div>
       ))}
 
-      {group.tasks.length > 0 && (
+      {(group.tasks ?? []).length > 0 && (
         <button
           className={`status-run-btn ${runState !== 'idle' ? `status-run-btn--${runState}` : ''}`}
           disabled={runState === 'running'}

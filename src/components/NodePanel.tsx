@@ -605,7 +605,7 @@ export function NodePanel() {
           <div className="node-panel__field">
             <label>Branches (one per line)</label>
             <textarea
-              value={data.branches.join('\n')}
+              value={(data.branches ?? []).join('\n')}
               rows={4}
               placeholder={"Urgent\nNormal\nSpam"}
               onChange={(e) =>
