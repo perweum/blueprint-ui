@@ -876,7 +876,7 @@ async function handleGroups(req: IncomingMessage, res: ServerResponse): Promise<
               swarmChildren = ((bp.nodes ?? []) as Array<{ type: string; data: { groupFolder?: string } }>)
                 .filter(n => n.type === 'swimlane')
                 .map(n => n.data.groupFolder ?? '')
-                .filter(Boolean);
+                .filter(cf => cf && cf !== e.name); // exclude self-references
             } catch { /* ignore */ }
           }
           const namePath = path.join(GROUPS_DIR, e.name, 'name.txt');
